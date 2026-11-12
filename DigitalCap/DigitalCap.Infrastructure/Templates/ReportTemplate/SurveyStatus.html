@@ -1,0 +1,54 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 11px;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: bold;
+            border-bottom: 2px solid #000;
+            padding-bottom: 5px;
+            margin-bottom: 15px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+
+        td, th {
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+        }
+
+        th {
+            background-color: #f0f0f0;
+            font-weight: bold;
+            width: 50%;
+        }
+    </style>
+</head>
+<body>
+    <div class="section-title">Survey Status - {{VESSEL_NAME}}</div>
+    <table>
+        <tr><th>Annual Class Surveys Due</th><td>{{CLASS_SURVEY_DATE}}</td></tr>
+        <tr><th>Drydocking Due</th><td>{{DRYDOCK_DATE}}</td></tr>
+        <tr><th>Special Survey Hull#</th><td>{{SPECIAL_HULL_NO}}</td></tr>
+        <tr><th>Due</th><td>{{DUE_DATE}}</td></tr>
+        <tr><th>Special/Continuous Machinery Survey Due</th><td>{{MACHINERY_DATE}}</td></tr>
+        <tr><th>Boiler Survey(s) Due</th><td>{{BOILER_DATE}}</td></tr>
+        <tr><th>Tailshaft Survey Due</th><td>{{TAILSHAFT_DATE}}</td></tr>
+    </table>
+    <p>
+        NOTE:
+        Above should reflect dates applicable upon completion of any surveys at this attendance.
+    </p>
+</body>
+</html>

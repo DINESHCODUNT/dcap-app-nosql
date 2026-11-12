@@ -1,0 +1,299 @@
+/* ==========================================================================
+   RichTextEditor Custom Styles (ReactQuill Snow Theme)
+   Zero inline CSS - Pure CSS class-based font family & font size support
+   ========================================================================== */
+
+/* 1. Editor container & border styling */
+.rich-text-editor-wrapper {
+    position: relative;
+    width: 100%;
+}
+
+.rich-text-editor-wrapper .quill {
+    display: flex;
+    flex-direction: column;
+}
+
+.rich-text-editor-wrapper .ql-toolbar.ql-snow {
+    background-color: #f8f9fa;
+    border: 1px solid #ced4da;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 6px 8px;
+    font-family: inherit;
+}
+
+.rich-text-editor-wrapper .ql-container.ql-snow {
+    border: 1px solid #ced4da;
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 4px;
+    font-family: inherit;
+    font-size: 14px;
+}
+
+/* Read-only mode styling */
+.rich-text-editor-wrapper.readonly-editor .ql-toolbar.ql-snow {
+    display: none;
+}
+
+.rich-text-editor-wrapper.readonly-editor .ql-container.ql-snow {
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    background-color: #f8f9fa;
+}
+
+.rich-text-editor-wrapper.readonly-editor .ql-editor {
+    cursor: default;
+}
+
+/* 2. Dropdown pickers size & scroll */
+.ql-snow .ql-picker.ql-font {
+    width: 155px;
+}
+
+.ql-snow .ql-picker.ql-size {
+    width: 145px;
+}
+
+.ql-snow .ql-picker.ql-header {
+    width: 120px;
+}
+
+.ql-snow .ql-picker-label {
+    padding-right: 22px;
+}
+
+.ql-snow .ql-picker-label::before {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-options,
+.ql-snow .ql-picker.ql-size .ql-picker-options {
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+/* 3. Font Family Picker Labels in Toolbar */
+.ql-snow .ql-picker.ql-font .ql-picker-label::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item::before {
+    content: "(inherited font)";
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="arial"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="arial"]::before {
+    content: "Arial";
+    font-family: Arial, sans-serif;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="courier-new"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="courier-new"]::before {
+    content: "Courier New";
+    font-family: "Courier New", Courier, monospace;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="georgia"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="georgia"]::before {
+    content: "Georgia";
+    font-family: Georgia, serif;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="impact"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="impact"]::before {
+    content: "Impact";
+    font-family: Impact, fantasy;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="lucida-console"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="lucida-console"]::before {
+    content: "Lucida Console";
+    font-family: "Lucida Console", Monaco, monospace;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="tahoma"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="tahoma"]::before {
+    content: "Tahoma";
+    font-family: Tahoma, sans-serif;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="times-new-roman"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="times-new-roman"]::before {
+    content: "Times New Roman";
+    font-family: "Times New Roman", Times, serif;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="trebuchet-ms"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="trebuchet-ms"]::before {
+    content: "Trebuchet MS";
+    font-family: "Trebuchet MS", sans-serif;
+}
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="verdana"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="verdana"]::before {
+    content: "Verdana";
+    font-family: Verdana, sans-serif;
+}
+
+/* 4. Font Size Picker Labels in Toolbar */
+.ql-snow .ql-picker.ql-size .ql-picker-label::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item::before {
+    content: "(inherited size)";
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value="8pt"]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value="8pt"]::before {
+    content: "1 (8pt)";
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value="10pt"]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value="10pt"]::before {
+    content: "2 (10pt)";
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value="12pt"]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value="12pt"]::before {
+    content: "3 (12pt)";
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value="14pt"]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value="14pt"]::before {
+    content: "4 (14pt)";
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value="18pt"]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value="18pt"]::before {
+    content: "5 (18pt)";
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value="24pt"]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value="24pt"]::before {
+    content: "6 (24pt)";
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value="36pt"]::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value="36pt"]::before {
+    content: "7 (36pt)";
+}
+
+/* 5. Header / Format Picker Labels in Toolbar */
+.ql-snow .ql-picker.ql-header .ql-picker-label::before,
+.ql-snow .ql-picker.ql-header .ql-picker-item::before {
+    content: "Paragraph";
+}
+
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="1"]::before,
+.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="1"]::before {
+    content: "Heading 1";
+}
+
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="2"]::before,
+.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="2"]::before {
+    content: "Heading 2";
+}
+
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="3"]::before,
+.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="3"]::before {
+    content: "Heading 3";
+}
+
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="4"]::before,
+.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="4"]::before {
+    content: "Heading 4";
+}
+
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="5"]::before,
+.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="5"]::before {
+    content: "Heading 5";
+}
+
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="6"]::before,
+.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="6"]::before {
+    content: "Heading 6";
+}
+
+/* 6. Content Font Family Classes (Applied by Quill Class Attributor) */
+.ql-font-arial,
+.ql-editor .ql-font-arial {
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+.ql-font-courier-new,
+.ql-editor .ql-font-courier-new {
+    font-family: "Courier New", Courier, monospace;
+}
+
+.ql-font-georgia,
+.ql-editor .ql-font-georgia {
+    font-family: Georgia, serif;
+}
+
+.ql-font-impact,
+.ql-editor .ql-font-impact {
+    font-family: Impact, "Arial Black", fantasy;
+}
+
+.ql-font-lucida-console,
+.ql-editor .ql-font-lucida-console {
+    font-family: "Lucida Console", Monaco, monospace;
+}
+
+.ql-font-tahoma,
+.ql-editor .ql-font-tahoma {
+    font-family: Tahoma, Geneva, sans-serif;
+}
+
+.ql-font-times-new-roman,
+.ql-editor .ql-font-times-new-roman {
+    font-family: "Times New Roman", Times, serif;
+}
+
+.ql-font-trebuchet-ms,
+.ql-editor .ql-font-trebuchet-ms {
+    font-family: "Trebuchet MS", Helvetica, sans-serif;
+}
+
+.ql-font-verdana,
+.ql-editor .ql-font-verdana {
+    font-family: Verdana, Geneva, sans-serif;
+}
+
+/* 7. Content Font Size Classes (Applied by Quill Class Attributor) */
+.ql-size-8pt,
+.ql-editor .ql-size-8pt {
+    font-size: 8pt;
+}
+
+.ql-size-10pt,
+.ql-editor .ql-size-10pt {
+    font-size: 10pt;
+}
+
+.ql-size-12pt,
+.ql-editor .ql-size-12pt {
+    font-size: 12pt;
+}
+
+.ql-size-14pt,
+.ql-editor .ql-size-14pt {
+    font-size: 14pt;
+}
+
+.ql-size-18pt,
+.ql-editor .ql-size-18pt {
+    font-size: 18pt;
+}
+
+.ql-size-24pt,
+.ql-editor .ql-size-24pt {
+    font-size: 24pt;
+}
+
+.ql-size-36pt,
+.ql-editor .ql-size-36pt {
+    font-size: 36pt;
+}

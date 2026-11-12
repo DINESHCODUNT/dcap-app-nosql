@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="digitalcap.client/digitalcap.client.esproj">
+    <Build />
+    <Deploy />
+  </Project>
+  <Project Path="DigitalCap.Core/DigitalCap.Core.csproj" />
+  <Project Path="DigitalCap.Infrastructure/DigitalCap.Infrastructure.csproj" />
+  <Project Path="DigitalCap.Persistence/DigitalCap.Persistence.csproj" />
+  <Project Path="DigitalCap.Server/DigitalCap.Server.csproj" />
+</Solution>

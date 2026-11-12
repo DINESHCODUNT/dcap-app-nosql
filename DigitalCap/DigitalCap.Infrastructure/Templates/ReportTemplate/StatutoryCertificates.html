@@ -1,0 +1,68 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 11px;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: bold;
+            border-bottom: 2px solid #000;
+            padding-bottom: 5px;
+            margin-bottom: 15px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #3b5bdb;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+
+        td, th {
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+        }
+
+        th {
+            background-color: #f0f0f0;
+            font-weight: bold;
+            width: 60%;
+        }
+
+        .status-valid {
+            color: green;
+        }
+
+        .status-expiring {
+            color: orange;
+        }
+
+        .status-expired {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="section-title">Statutory Certificates</div>
+    {{CERT_SECTIONS_HTML}}
+</body>
+<p>
+    NOTE:
+    Above should reflect dates applicable upon completion of any surveys at this attendance.
+</p>
+</html>

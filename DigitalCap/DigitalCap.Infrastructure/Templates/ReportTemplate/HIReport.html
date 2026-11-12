@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 11px;
+            padding: 20px;
+        }
+
+        .title {
+            font-size: 14px;
+            font-weight: bold;
+            border-bottom: 2px solid #000;
+            padding-bottom: 5px;
+            margin-bottom: 15px;
+        }
+
+        .section {
+            font-size: 12px;
+            font-weight: bold;
+            margin: 15px 0 8px 0;
+            background: #f0f0f0;
+            padding: 5px 8px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+        }
+
+        td, th {
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+            font-size: 11px;
+        }
+
+        th {
+            background: #f5f5f5;
+            font-weight: bold;
+            width: 40%;
+        }
+
+        .radio-yes {
+            color: green;
+            font-weight: bold;
+        }
+
+        .radio-no {
+            color: red;
+            font-weight: bold;
+        }
+
+        .radio-na {
+            color: gray;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class='title'>H & I Report</div>
+
+    <div class='section'>1. Thickness Measurement</div>
+
+    <table>
+        <tr>
+            <th>Organization Name</th>
+            <td>{{COMPANY_NAME}}</td>
+        </tr>
+
+        <tr>
+            <th>Certificate No</th>
+            <td>{{CERTIFICATE_NUMBER}}</td>
+        </tr>
+
+        <tr>
+            <th>Expiry Date</th>
+            <td>{{EXPIRY_DATE}}</td>
+        </tr>
+
+        <tr>
+            <th>Zone A</th>
+            <td>{{ZONE_A}}</td>
+        </tr>
+
+        <tr>
+            <th>Zone B</th>
+            <td>{{ZONE_B}}</td>
+        </tr>
+
+        <tr>
+            <th>Zone C</th>
+            <td>{{ZONE_C}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>2. Maintenance</div>
+
+    <table>
+        <tr>
+            <th>Onboard Maintenance</th>
+            <td>{{MAINTENANCE_EXECUTED}}</td>
+        </tr>
+
+        <tr>
+            <th>Additional Comments</th>
+            <td>{{ADDITIONAL_COMMENTS}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>3. Accommodation</div>
+
+    <table>
+        <tr>
+            <th>Accommodation</th>
+            <td>{{ACCOMMODATION}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>4. Photographs</div>
+
+    <table>
+        <tr>
+            <th>Photographs</th>
+            <td>{{PHOTOGRAPHS}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>5. Operational Test</div>
+
+    <table>
+        <tr>
+            <th>Location</th>
+            <td>{{TEST_LOCATION}}</td>
+        </tr>
+
+        <tr>
+            <th>Start Date</th>
+            <td>{{START_DATE}}</td>
+        </tr>
+
+        <tr>
+            <th>Finish Date</th>
+            <td>{{FINISH_DATE}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>6. Class Survey Details</div>
+
+    <table>
+        <tr>
+            <th>Associated Report Number</th>
+            <td>{{ASSOCIATED_REPORT_NUMBER}}</td>
+        </tr>
+
+        <tr>
+            <th>Associated Report Date</th>
+            <td>{{ASSOCIATED_REPORT_DATE}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>7. Confirmation for Survey</div>
+
+    <table>
+        <tr>
+            <th>No areas of excessive corrosion remaining</th>
+            <td>{{SUBSTANTIAL_CORROSION}}</td>
+        </tr>
+
+        <tr>
+            <th>No outstanding Class recommendations</th>
+            <td>{{STATUTORY_DEFICIENCIES}}</td>
+        </tr>
+
+        <tr>
+            <th>SafeHull Fatigue Analysis found satisfactory</th>
+            <td>{{FOUND_SATISFACTORY}}</td>
+        </tr>
+
+        <tr>
+            <th>Modifications carried out</th>
+            <td>{{UNDER_REMARKS}}</td>
+        </tr>
+
+        <tr>
+            <th>Plating under bellmouths acceptable</th>
+            <td>{{SCOURING_OR_PITTING}}</td>
+        </tr>
+
+        <tr>
+            <th>Bottom plating no significant scouring</th>
+            <td>{{BOTTOM_PLATING}}</td>
+        </tr>
+
+        <tr>
+            <th>Remarks</th>
+            <td>{{REMARKS}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>Summary — Grading</div>
+
+    {{GRADING_TABLE}}
+
+    <div class='section'>Survey Made Without Prejudice</div>
+
+    <table>
+        <tr>
+            <th>Lead Surveyor's Name</th>
+            <td>{{LEAD_SURVEYOR_NAME}}</td>
+        </tr>
+
+        <tr>
+            <th>Employee Number</th>
+            <td>{{LEAD_SURVEYOR_NUMBER}}</td>
+        </tr>
+
+        <tr>
+            <th>Last Visit Date</th>
+            <td>{{LAST_VISIT_DATE}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>Surveyor's Signature</div>
+
+    <table>
+        <tr>
+            <th>Surveyor's Name</th>
+            <td>{{SURVEYOR_NAME}}</td>
+        </tr>
+
+        <tr>
+            <th>Employee Number</th>
+            <td>{{SURVEYOR_NUMBER}}</td>
+        </tr>
+    </table>
+
+    <div class='section'>Other Individuals Participated</div>
+
+    <table>
+        <tr><th>A</th><td>{{INDIVIDUAL_A}}</td></tr>
+        <tr><th>B</th><td>{{INDIVIDUAL_B}}</td></tr>
+        <tr><th>C</th><td>{{INDIVIDUAL_C}}</td></tr>
+        <tr><th>D</th><td>{{INDIVIDUAL_D}}</td></tr>
+        <tr><th>E</th><td>{{INDIVIDUAL_E}}</td></tr>
+        <tr><th>F</th><td>{{INDIVIDUAL_F}}</td></tr>
+    </table>
+
+</body>
+</html>

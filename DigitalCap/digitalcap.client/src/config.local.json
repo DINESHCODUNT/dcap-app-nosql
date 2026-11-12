@@ -1,0 +1,21 @@
+{
+  "azureAdConfig": {
+    "auth": {
+      "clientId": "d8a3a596-6fcc-4047-ac76-d990b30f1bb0",
+      "authority": "https://login.microsoftonline.com/d810b06c-d004-4d52-b0aa-4f3581ee7020/v2.0",
+      "redirectUri": "https://localhost:55562/success",
+      "postLogoutRedirectUri": "https://localhost:55562/",
+      "navigateToLoginRequestUrl": false
+    },
+        "cache": {
+            "cacheLocation": "localStorage",
+            "storeAuthStateInCookie": true
+        },
+        "scopes": [
+            "d8a3a596-6fcc-4047-ac76-d990b30f1bb0/.default"
+        ],
+        "system": {
+            "allowRedirectInIframe": true
+        }
+    }
+}

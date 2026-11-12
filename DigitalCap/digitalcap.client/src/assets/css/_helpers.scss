@@ -1,0 +1,103 @@
+@use "sass:string";
+
+$spaceamounts: (
+  5,
+  10,
+  15,
+  20,
+  25,
+  30
+);
+$sides: (
+  top,
+  bottom,
+  left,
+  right
+);
+$font-sizes: (
+  12,
+  13,
+  14,
+  15,
+  16,
+  18,
+  20,
+  24,
+  30,
+  36,
+  48,
+  60,
+  72
+);
+$font-weights: (
+  100,
+  200,
+  300,
+  400,
+  500,
+  600,
+  700,
+  800,
+  900
+);
+
+@each $space in $spaceamounts {
+  @each $side in $sides {
+    $short: string.slice($side, 1, 1);
+
+    .m#{$short}-#{$space} {
+      margin-#{$side}: #{$space}px !important;
+    }
+
+    .p#{$short}-#{$space} {
+      padding-#{$side}: #{$space}px !important;
+    }
+  }
+}
+
+@each $space in $spaceamounts {
+  .m-#{$space} {
+    margin: #{$space}px !important;
+  }
+
+  .p-#{$space} {
+    padding: #{$space}px !important;
+  }
+}
+
+@each $space in $spaceamounts {
+  .mx-#{$space} {
+    margin-left: #{$space}px !important;
+    margin-right: #{$space}px !important;
+  }
+  .px-#{$space} {
+    padding-left: #{$space}px !important;
+    padding-right: #{$space}px !important;
+  }
+  .my-#{$space} {
+    margin-top: #{$space}px !important;
+    margin-bottom: #{$space}px !important;
+  }
+  .py-#{$space} {
+    padding-top: #{$space}px !important;
+    padding-bottom: #{$space}px !important;
+  }
+}
+
+@each $size in $font-sizes {
+  .tx-#{$size} {
+    font-size: #{$size}px !important;
+  }
+}
+
+@each $weight in $font-weights {
+  ._#{$weight} {
+    font-weight: #{$weight} !important;
+  }
+}
+
+.center-divider {
+  border: 0;
+  border-top: 1px solid rgb(34 1 1) !important;
+
+}

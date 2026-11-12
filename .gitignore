@@ -1,0 +1,15 @@
+/.vs
+**/dist*
+*/node_modules
+/DigitalCap/.vs
+/DigitalCap/DigitalCap.Core/bin
+/DigitalCap/DigitalCap.Core/obj
+/DigitalCap/DigitalCap.Infrastructure/bin
+/DigitalCap/DigitalCap.Infrastructure/obj
+/DigitalCap/DigitalCap.Persistence/obj
+/DigitalCap/DigitalCap.Persistence/bin
+/DigitalCap/DigitalCap.Server/bin
+/DigitalCap/DigitalCap.Server/obj
+/DigitalCap/DigitalCap.Server/Properties/PublishProfiles
+/DigitalCap/DigitalCap.Server/wwwroot
+/DigitalCap/DigitalCap.Server/appsettings.Development.json

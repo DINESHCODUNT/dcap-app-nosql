@@ -1,0 +1,105 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 11px;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: bold;
+            border-bottom: 2px solid #000;
+            padding-bottom: 5px;
+            margin-bottom: 15px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+
+        td, th {
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+        }
+
+        th {
+            background-color: #f0f0f0;
+            font-weight: bold;
+            width: 35%;
+        }
+
+        .certify-text {
+            font-size: 11px;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="section-title">Vessel Main Data - {{VESSEL_NAME}}</div>
+
+    <table>
+        <tr>
+            <th style="width: 50%; text-align: center;">REPORT NO.</th>
+            <th style="width: 50%; text-align: center;">PORT/DATE</th>
+        </tr>
+        <tr>
+            <td style="text-align: center;">{{REPORT_NO}}</td>
+            <td style="text-align: center;">{{REPORT_PORT}} / {{PORT_VISIT_DATE}}</td>
+        </tr>
+    </table>
+
+    <div class="certify-text">
+        <strong>This is to Certify</strong> that the undersigned Surveyors to this Bureau did, at the request of the Owner's Representative, attend the
+        <strong>{{NAME_PREFIX}} {{VESSEL_NAME}}</strong> of <strong>{{FLAG}}</strong>
+        <strong>IMO No. {{IMO_NUMBER}}</strong> as the vessel lay afloat on drydock and underway on
+        <strong>{{FIRST_VISIT_DATE}}</strong> and subsequent dates in order to examine and report upon the vessel relative to Condition Assessment Survey.
+    </div>
+    <p>For further particulars see report as follows</p>
+
+    <div class="section-title">Vessel's Primary Information</div>
+    <table>
+        <tr><th>Type of Vessel</th><td>{{VESSEL_TYPE}}</td><th>Year Built</th><td>{{YEAR_BUILT}}</td></tr>
+        <tr><th>Built By</th><td>{{BUILT_BY}}</td><th>Hull No</th><td>{{HULL_NO}}</td></tr>
+        <tr><th>Flag</th><td>{{FLAG}}</td><th>Port of Registry</th><td>{{PORT_OF_REGISTRY}}</td></tr>
+        <tr><th>Official No</th><td>{{OFFICIAL_NO}}</td><th>Call Sign</th><td>{{CALL_SIGN}}</td></tr>
+        <tr><th>Classed</th><td>{{CLASSED}}</td><th>Class No</th><td>{{CLASS_NO}}</td></tr>
+    </table>
+
+    <div class="section-title">Vessel's Additional Information</div>
+    <table>
+        <tr><th>Class Notations</th><td>{{CLASS_NOTATIONS}}</td></tr>
+        <tr><th>Additional Class Notations</th><td>{{ADDITIONAL_CLASS_NOTATIONS}}</td></tr>
+        <tr><th>Other</th><td>{{OTHER_NOTATIONS}}</td></tr>
+        <tr><th>Previous Names</th><td>{{PREVIOUS_NAMES}}</td></tr>
+        <tr><th>Owners</th><td>{{OWNERS}}</td></tr>
+        <tr><th>Managers</th><td>{{MANAGERS}}</td></tr>
+    </table>
+
+    <div class="section-title">Main Dimensions</div>
+    <table>
+        <tr><th>Length (m)</th><td>{{LENGTH}}</td><th>Breadth (m)</th><td>{{BREADTH}}</td></tr>
+        <tr><th>Depth (m)</th><td>{{DEPTH}}</td><th>Summer Draft (m)</th><td>{{SUMMER_DRAFT}}</td></tr>
+        <tr><th>Deadweight</th><td>{{DEADWEIGHT}}</td><th>Gross Tons</th><td>{{GROSS_TONS}}</td></tr>
+        <tr><th>Net Tons</th><td>{{NET_TONS}}</td><td colspan="2"></td></tr>
+    </table>
+
+    <div class="section-title">Propulsion Details</div>
+    <table>
+        <tr><th>Propulsion Type</th><td>{{PROPULSION_TYPE}} {{PROPULSION_VALUE}} KE at {{KW}} Shaft RPM</td></tr>
+        <tr><th>Propulsion Manufacturer</th><td>{{PROPULSION_MANUFACTURER}}</td></tr>
+        <tr><th>Gear Manufacturer</th><td>{{GEAR_MANUFACTURER}}</td></tr>
+    </table>
+</body>
+</html>
