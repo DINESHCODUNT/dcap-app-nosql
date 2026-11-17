@@ -1,6 +1,7 @@
 ﻿using DigitalCap.Core.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -31,6 +32,67 @@ namespace DigitalCap.Infrastructure.DbContext
                 .Ignore(x => x.IsEnabled);
 
             base.OnModelCreating(builder);
+
+            if (Database.IsCosmos())
+            {
+                builder.Ignore<UserRequest>();
+                builder.Ignore<ApplicationToOrganizationMapping>();
+
+                builder.Entity<ApplicationUser>(b =>
+                {
+                    b.ToContainer("dbo_AspNetUsers");
+                    b.HasPartitionKey(u => u.Id);
+                    b.Property(u => u.Id).ToJsonProperty("id");
+                    b.HasNoDiscriminator();
+                    b.UseETagConcurrency();
+                    b.Property(u => u.ConcurrencyStamp).IsConcurrencyToken(false);
+                });
+
+                builder.Entity<IdentityRole>(b =>
+                {
+                    b.ToContainer("dbo_AspNetRoles");
+                    b.HasPartitionKey(r => r.Id);
+                    b.Property(r => r.Id).ToJsonProperty("id");
+                    b.HasNoDiscriminator();
+                    b.UseETagConcurrency();
+                    b.Property(r => r.ConcurrencyStamp).IsConcurrencyToken(false);
+                });
+
+                builder.Entity<IdentityUserRole<string>>(b =>
+                {
+                    b.ToContainer("dbo_AspNetUserRoles");
+                    b.HasPartitionKey(x => x.UserId);
+                    b.HasNoDiscriminator();
+                });
+
+                builder.Entity<IdentityUserClaim<string>>(b =>
+                {
+                    b.ToContainer("dbo_AspNetUserClaims");
+                    b.HasPartitionKey(x => x.UserId);
+                    b.HasNoDiscriminator();
+                });
+
+                builder.Entity<IdentityUserLogin<string>>(b =>
+                {
+                    b.ToContainer("dbo_AspNetUserLogins");
+                    b.HasPartitionKey(x => x.UserId);
+                    b.HasNoDiscriminator();
+                });
+
+                builder.Entity<IdentityUserToken<string>>(b =>
+                {
+                    b.ToContainer("dbo_AspNetUserTokens");
+                    b.HasPartitionKey(x => x.UserId);
+                    b.HasNoDiscriminator();
+                });
+
+                builder.Entity<IdentityRoleClaim<string>>(b =>
+                {
+                    b.ToContainer("dbo_AspNetRoleClaims");
+                    b.HasPartitionKey(x => x.RoleId);
+                    b.HasNoDiscriminator();
+                });
+            }
         }
 
         public DbSet<ApplicationToOrganizationMapping> ApplicationToOrganizationMappings { get; set; }

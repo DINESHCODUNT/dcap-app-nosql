@@ -1,5 +1,6 @@
 using Azure.Identity;
 using DigitalCap.Infrastructure.DbContext;
+using DigitalCap.Infrastructure.Identity;
 using DigitalCap.Persistence.Cosmos.Configuration;
 using DigitalCap.Persistence.Cosmos.Infrastructure;
 using DigitalCap.Persistence.Extensions;
@@ -52,8 +53,78 @@ builder.Services.Configure<OpenIdConnectOptions>(options =>
     options.TokenValidationParameters.NameClaimType = ClaimTypes.Upn;
 });
 
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
+var identityProvider = builder.Configuration["Identity:Provider"] ?? "Sql";
+var useCosmosIdentity = string.Equals(identityProvider, "Cosmos", StringComparison.OrdinalIgnoreCase);
+
+if (useCosmosIdentity)
+{
+    var cosmosSection = builder.Configuration.GetSection("CosmosDb");
+    var cosmosOptions = cosmosSection.Get<CosmosDbOptions>()
+        ?? throw new InvalidOperationException("Missing configuration section 'CosmosDb'.");
+
+    if (string.IsNullOrWhiteSpace(cosmosOptions.Endpoint))
+    {
+        throw new InvalidOperationException("Cosmos DB configuration is missing 'CosmosDb:Endpoint'.");
+    }
+
+    if (!cosmosOptions.UseManagedIdentity && string.IsNullOrWhiteSpace(cosmosOptions.Key))
+    {
+        throw new InvalidOperationException("Cosmos DB configuration is missing 'CosmosDb:Key'.");
+    }
+
+    if (string.IsNullOrWhiteSpace(cosmosOptions.DatabaseName))
+    {
+        throw new InvalidOperationException("Cosmos DB configuration is missing 'CosmosDb:DatabaseName'.");
+    }
+
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    {
+        void ConfigureCosmos(Microsoft.EntityFrameworkCore.Infrastructure.CosmosDbContextOptionsBuilder cosmosBuilder)
+        {
+            if (cosmosOptions.UseEmulator)
+            {
+                cosmosBuilder.ConnectionMode(Microsoft.Azure.Cosmos.ConnectionMode.Gateway);
+                cosmosBuilder.LimitToEndpoint();
+
+                var uri = new Uri(cosmosOptions.Endpoint);
+                if (string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+                {
+                    cosmosBuilder.HttpClientFactory(() => new HttpClient(new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                    }));
+                }
+            }
+            else
+            {
+                cosmosBuilder.ConnectionMode(Microsoft.Azure.Cosmos.ConnectionMode.Direct);
+            }
+        }
+
+        if (cosmosOptions.UseManagedIdentity)
+        {
+            options.UseCosmos(
+                cosmosOptions.Endpoint,
+                new DefaultAzureCredential(),
+                cosmosOptions.DatabaseName,
+                ConfigureCosmos);
+        }
+        else
+        {
+            options.UseCosmos(
+                cosmosOptions.Endpoint,
+                cosmosOptions.Key,
+                cosmosOptions.DatabaseName,
+                ConfigureCosmos);
+        }
+    });
+}
+else
+{
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        options.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
+}
 
 
 var adAudience = configuration["AzureAd:Audience"] ?? "d8a3a596-6fcc-4047-ac76-d990b30f1bb0";
@@ -145,20 +216,41 @@ builder.Services.AddAuthentication(options =>
         }
     };
 });
-builder.Services.AddIdentityCore<ApplicationUser>(options =>
-    {
-        options.SignIn.RequireConfirmedAccount = false;
-        options.Password.RequireDigit = false;
-        options.Password.RequiredLength = 3;
-        options.Password.RequireLowercase = false;
-        options.Password.RequireNonAlphanumeric = false;
-        options.Password.RequiredUniqueChars = 0;
-        options.Password.RequireUppercase = false;
-    })
-    .AddRoles<IdentityRole>()
-    .AddSignInManager()
-    .AddEntityFrameworkStores<ApplicationDbContext>()
-    .AddDefaultTokenProviders();
+if (useCosmosIdentity)
+{
+    builder.Services.AddIdentityCore<ApplicationUser>(options =>
+        {
+            options.SignIn.RequireConfirmedAccount = false;
+            options.Password.RequireDigit = false;
+            options.Password.RequiredLength = 3;
+            options.Password.RequireLowercase = false;
+            options.Password.RequireNonAlphanumeric = false;
+            options.Password.RequiredUniqueChars = 0;
+            options.Password.RequireUppercase = false;
+        })
+        .AddRoles<IdentityRole>()
+        .AddSignInManager()
+        .AddEntityFrameworkStores<ApplicationDbContext>()
+        .AddUserStore<CosmosUserStore>()
+        .AddDefaultTokenProviders();
+}
+else
+{
+    builder.Services.AddIdentityCore<ApplicationUser>(options =>
+        {
+            options.SignIn.RequireConfirmedAccount = false;
+            options.Password.RequireDigit = false;
+            options.Password.RequiredLength = 3;
+            options.Password.RequireLowercase = false;
+            options.Password.RequireNonAlphanumeric = false;
+            options.Password.RequiredUniqueChars = 0;
+            options.Password.RequireUppercase = false;
+        })
+        .AddRoles<IdentityRole>()
+        .AddSignInManager()
+        .AddEntityFrameworkStores<ApplicationDbContext>()
+        .AddDefaultTokenProviders();
+}
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
@@ -257,6 +349,146 @@ app.MapGet("/health/cosmos", async (
         return Results.Json(new { status = "Unhealthy" }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 }).AllowAnonymous();
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapGet("/health/identity", async (
+        string email,
+        bool? testUpdate,
+        IConfiguration config,
+        UserManager<ApplicationUser> userManager,
+        ApplicationDbContext db) =>
+    {
+        var provider = config["Identity:Provider"] ?? "Sql";
+        var isCosmos = string.Equals(provider, "Cosmos", StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            var user = await userManager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                return Results.Ok(new
+                {
+                    provider,
+                    userFound = false,
+                    userId = (string?)null,
+                    userName = (string?)null,
+                    roles = Array.Empty<string>(),
+                    isInFirstRole = false
+                });
+            }
+
+            var roles = await userManager.GetRolesAsync(user);
+            var firstRole = roles.FirstOrDefault();
+            var isInFirstRole = !string.IsNullOrEmpty(firstRole) && await userManager.IsInRoleAsync(user, firstRole);
+
+            string? userRoleIdCheck = null;
+            string? userRoleGeneratedId = null;
+            string? userRoleStoredId = null;
+            bool? userRoleIdMatches = null;
+
+            if (!isCosmos)
+            {
+                userRoleIdCheck = "not applicable (Sql)";
+            }
+            else
+            {
+                var storedLinks = await db.Set<IdentityUserRole<string>>()
+                    .AsNoTracking()
+                    .Where(ur => ur.UserId == user.Id)
+                    .ToListAsync();
+
+                if (storedLinks.Count == 0)
+                {
+                    userRoleIdCheck = "no link found";
+                    userRoleIdMatches = false;
+                }
+                else
+                {
+                    var link = storedLinks[0];
+                    var probe = new IdentityUserRole<string> { UserId = link.UserId, RoleId = link.RoleId };
+                    Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<IdentityUserRole<string>>? entry = null;
+                    string? generatedId = null;
+                    string? idPropertyName = null;
+                    try
+                    {
+                        entry = db.Add(probe);
+                        var idProperty = entry.Metadata.GetProperties()
+                            .FirstOrDefault(p => CosmosPropertyExtensions.GetJsonPropertyName(p) == "id");
+                        if (idProperty != null)
+                        {
+                            idPropertyName = idProperty.Name;
+                            generatedId = entry.Property(idPropertyName).CurrentValue?.ToString();
+                        }
+                    }
+                    finally
+                    {
+                        if (entry != null)
+                        {
+                            entry.State = EntityState.Detached;
+                        }
+                    }
+
+                    string? storedId = null;
+                    if (!string.IsNullOrEmpty(idPropertyName))
+                    {
+                        storedId = await db.Set<IdentityUserRole<string>>()
+                            .AsNoTracking()
+                            .Where(ur => ur.UserId == link.UserId && ur.RoleId == link.RoleId)
+                            .Select(ur => EF.Property<string>(ur, idPropertyName))
+                            .FirstOrDefaultAsync();
+                    }
+
+                    userRoleGeneratedId = generatedId;
+                    userRoleStoredId = storedId;
+                    userRoleIdMatches = generatedId != null && storedId != null && generatedId == storedId;
+                    userRoleIdCheck = userRoleIdMatches == true ? "matches" : "mismatch";
+                }
+            }
+
+            if (testUpdate == true)
+            {
+                var updateResult = await userManager.UpdateAsync(user);
+                return Results.Ok(new
+                {
+                    provider,
+                    userFound = true,
+                    userId = user.Id,
+                    userName = user.UserName,
+                    roles,
+                    isInFirstRole,
+                    userRoleIdCheck,
+                    userRoleGeneratedId,
+                    userRoleStoredId,
+                    userRoleIdMatches,
+                    updateSucceeded = updateResult.Succeeded,
+                    updateErrors = updateResult.Succeeded ? null : updateResult.Errors.Select(e => e.Description).ToArray()
+                });
+            }
+
+            return Results.Ok(new
+            {
+                provider,
+                userFound = true,
+                userId = user.Id,
+                userName = user.UserName,
+                roles,
+                isInFirstRole,
+                userRoleIdCheck,
+                userRoleGeneratedId,
+                userRoleStoredId,
+                userRoleIdMatches
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new
+            {
+                provider,
+                error = ex.Message
+            }, statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }).AllowAnonymous();
+}
 
 app.MapFallbackToFile("/index.html");
 

@@ -244,13 +244,13 @@ namespace DigitalCap.Persistence.Cosmos.Infrastructure
 
                 #region SQL schema dbo (69 tables)
                 { dbo_ApplicationToOrganizationMappings, "/id" },
-                { dbo_AspNetRoleClaims, "/id" },
+                { dbo_AspNetRoleClaims, "/RoleId" },
                 { dbo_AspNetRoles, "/id" },
-                { dbo_AspNetUserClaims, "/id" },
-                { dbo_AspNetUserLogins, "/id" },
-                { dbo_AspNetUserRoles, "/id" },
+                { dbo_AspNetUserClaims, "/UserId" },
+                { dbo_AspNetUserLogins, "/UserId" },
+                { dbo_AspNetUserRoles, "/UserId" },
                 { dbo_AspNetUsers, "/id" },
-                { dbo_AspNetUserTokens, "/id" },
+                { dbo_AspNetUserTokens, "/UserId" },
                 { dbo_BulkUpload, "/id" },
                 { dbo_Clients, "/ClientId" },
                 { dbo_CurrentCondition, "/id" },
