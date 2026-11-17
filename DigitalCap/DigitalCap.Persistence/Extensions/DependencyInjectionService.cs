@@ -3,6 +3,7 @@ using DigitalCap.Core.Interfaces.Service;
 using DigitalCap.Core.Models;
 using DigitalCap.Core.Security;
 using DigitalCap.Infrastructure.Service;
+using DigitalCap.Persistence.Cosmos.Infrastructure;
 using DigitalCap.Persistence.Repositories;
 using DinkToPdf;
 using DinkToPdf.Contracts;
@@ -19,6 +20,8 @@ namespace DigitalCap.Persistence.Extensions
     {
         public static IServiceCollection AddPersistenceServices(this IServiceCollection services, IConfiguration configuration)
         {
+            services.AddCosmosInfrastructure(configuration);
+
             // UnitOfWork
             services.AddScoped<IUnitOfWork, UnitOfWork>();
 
