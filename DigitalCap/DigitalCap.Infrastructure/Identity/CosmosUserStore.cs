@@ -18,6 +18,35 @@ namespace DigitalCap.Infrastructure.Identity
         {
         }
 
+        public override async Task<ApplicationUser?> FindByNameAsync(string normalizedUserName, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(normalizedUserName);
+
+            return await Users.FirstOrDefaultAsync(
+                u => string.Equals(u.NormalizedUserName, normalizedUserName, StringComparison.OrdinalIgnoreCase),
+                cancellationToken);
+        }
+
+        public override async Task<ApplicationUser?> FindByEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(normalizedEmail);
+
+            return await Users.SingleOrDefaultAsync(
+                u => string.Equals(u.NormalizedEmail, normalizedEmail, StringComparison.OrdinalIgnoreCase),
+                cancellationToken);
+        }
+
+        protected override async Task<IdentityRole?> FindRoleAsync(string normalizedRoleName, CancellationToken cancellationToken)
+        {
+            return await Context.Set<IdentityRole>().SingleOrDefaultAsync(
+                r => string.Equals(r.NormalizedName, normalizedRoleName, StringComparison.OrdinalIgnoreCase),
+                cancellationToken);
+        }
+
         public override async Task<IList<string>> GetRolesAsync(ApplicationUser user, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -52,7 +81,7 @@ namespace DigitalCap.Infrastructure.Identity
             }
 
             var role = await Context.Set<IdentityRole>()
-                .FirstOrDefaultAsync(r => r.NormalizedName == normalizedRoleName, cancellationToken);
+                .FirstOrDefaultAsync(r => string.Equals(r.NormalizedName, normalizedRoleName, StringComparison.OrdinalIgnoreCase), cancellationToken);
 
             if (role == null)
             {
@@ -76,7 +105,7 @@ namespace DigitalCap.Infrastructure.Identity
             }
 
             var role = await Context.Set<IdentityRole>()
-                .FirstOrDefaultAsync(r => r.NormalizedName == normalizedRoleName, cancellationToken);
+                .FirstOrDefaultAsync(r => string.Equals(r.NormalizedName, normalizedRoleName, StringComparison.OrdinalIgnoreCase), cancellationToken);
 
             if (role == null)
             {

@@ -4,6 +4,7 @@ using DigitalCap.Core.Models;
 using DigitalCap.Core.Security;
 using DigitalCap.Infrastructure.Service;
 using DigitalCap.Persistence.Cosmos.Infrastructure;
+using DigitalCap.Persistence.Cosmos.Repositories;
 using DigitalCap.Persistence.Repositories;
 using DinkToPdf;
 using DinkToPdf.Contracts;
@@ -66,6 +67,69 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<ITemplateReader, TemplateReader>();
             services.AddScoped<IManageAbsAdminRepository, ManageAbsAdminRepository>();
             services.AddScoped<ITemplateRepository, TemplateRepository>();
+
+            var dataProviderDefault = configuration["DataProvider:Default"] ?? "Sql";
+            if (!string.Equals(dataProviderDefault, "Sql", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(dataProviderDefault, "Cosmos", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"DataProvider:Default must be 'Sql' or 'Cosmos' (found '{dataProviderDefault}').");
+            }
+
+            services.AddScoped<ClassRepository>();
+            services.AddScoped<PortRepository>();
+            services.AddScoped<ClientRepository>();
+            services.AddScoped<CosmosClassRepository>();
+            services.AddScoped<CosmosPortRepository>();
+            services.AddScoped<CosmosClientRepository>();
+            services.AddScoped<DigitalCap.Persistence.Cosmos.Tools.SqlToCosmosCopier>();
+            services.AddScoped<ClientProfileRepository>();
+            services.AddScoped<SecurityClientRepository>();
+            services.AddScoped<CosmosClientProfileRepository>();
+            services.AddScoped<CosmosSecurityClientRepository>();
+            services.AddScoped<UserAccountRepository>();
+            services.AddScoped<ManageAbsAdminRepository>();
+            services.AddScoped<UserPermissionRepository>();
+            services.AddScoped<CosmosUserAccountRepository>();
+            services.AddScoped<CosmosManageAbsAdminRepository>();
+            services.AddScoped<CosmosUserPermissionRepository>();
+            services.AddScoped<ActivityRepository>();
+            services.AddScoped<CommentRepository>();
+            services.AddScoped<GradeRepository>();
+            services.AddScoped<FileStorageRepository>();
+            services.AddScoped<TaskRepository>();
+            services.AddScoped<CosmosActivityRepository>();
+            services.AddScoped<CosmosCommentRepository>();
+            services.AddScoped<CosmosGradeRepository>();
+            services.AddScoped<CosmosFileStorageRepository>();
+            services.AddScoped<CosmosTaskRepository>();
+            services.AddScoped<CosmosActivityWriter>();
+            services.AddScoped<ProjectStatusRecalculator>();
+            services.AddScoped<CapRepository>();
+            services.AddScoped<VesselRepository>();
+            services.AddScoped<ProjectRepository>();
+            services.AddScoped<CosmosCapRepository>();
+            services.AddScoped<CosmosVesselRepository>();
+            services.AddScoped<CosmosProjectRepository>();
+
+            if (string.Equals(dataProviderDefault, "Cosmos", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddScoped<IClassRepository, CosmosClassRepository>();
+                services.AddScoped<IPortRepository, CosmosPortRepository>();
+                services.AddScoped<IClientRepository, CosmosClientRepository>();
+                services.AddScoped<IClientProfileRepository, CosmosClientProfileRepository>();
+                services.AddScoped<ISecurityClientRepository, CosmosSecurityClientRepository>();
+                services.AddScoped<IUserAccountRepository, CosmosUserAccountRepository>();
+                services.AddScoped<IManageAbsAdminRepository, CosmosManageAbsAdminRepository>();
+                services.AddScoped<IUserPermissionRepository, CosmosUserPermissionRepository>();
+                services.AddScoped<IActivityRepository, CosmosActivityRepository>();
+                services.AddScoped<ICommentRepository, CosmosCommentRepository>();
+                services.AddScoped<IGradeRepository, CosmosGradeRepository>();
+                services.AddScoped<IFileStorageRepository, CosmosFileStorageRepository>();
+                services.AddScoped<ITaskRepository, CosmosTaskRepository>();
+                services.AddScoped<ICapRepository, CosmosCapRepository>();
+                services.AddScoped<IVesselRepository, CosmosVesselRepository>();
+                services.AddScoped<IProjectRepository, CosmosProjectRepository>();
+            }
             services.AddHttpClient(); // Add this
             services.AddScoped<IHttpService, HttpService>();
             // Services

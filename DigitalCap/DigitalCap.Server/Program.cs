@@ -4,6 +4,7 @@ using DigitalCap.Infrastructure.Identity;
 using DigitalCap.Persistence.Cosmos.Configuration;
 using DigitalCap.Persistence.Cosmos.Infrastructure;
 using DigitalCap.Persistence.Extensions;
+using DigitalCap.Server.DevTools;
 using DigitalCap.WebApi.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -232,6 +233,7 @@ if (useCosmosIdentity)
         .AddSignInManager()
         .AddEntityFrameworkStores<ApplicationDbContext>()
         .AddUserStore<CosmosUserStore>()
+        .AddRoleStore<CosmosRoleStore>()
         .AddDefaultTokenProviders();
 }
 else
@@ -352,142 +354,7 @@ app.MapGet("/health/cosmos", async (
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapGet("/health/identity", async (
-        string email,
-        bool? testUpdate,
-        IConfiguration config,
-        UserManager<ApplicationUser> userManager,
-        ApplicationDbContext db) =>
-    {
-        var provider = config["Identity:Provider"] ?? "Sql";
-        var isCosmos = string.Equals(provider, "Cosmos", StringComparison.OrdinalIgnoreCase);
-        try
-        {
-            var user = await userManager.FindByEmailAsync(email);
-            if (user == null)
-            {
-                return Results.Ok(new
-                {
-                    provider,
-                    userFound = false,
-                    userId = (string?)null,
-                    userName = (string?)null,
-                    roles = Array.Empty<string>(),
-                    isInFirstRole = false
-                });
-            }
-
-            var roles = await userManager.GetRolesAsync(user);
-            var firstRole = roles.FirstOrDefault();
-            var isInFirstRole = !string.IsNullOrEmpty(firstRole) && await userManager.IsInRoleAsync(user, firstRole);
-
-            string? userRoleIdCheck = null;
-            string? userRoleGeneratedId = null;
-            string? userRoleStoredId = null;
-            bool? userRoleIdMatches = null;
-
-            if (!isCosmos)
-            {
-                userRoleIdCheck = "not applicable (Sql)";
-            }
-            else
-            {
-                var storedLinks = await db.Set<IdentityUserRole<string>>()
-                    .AsNoTracking()
-                    .Where(ur => ur.UserId == user.Id)
-                    .ToListAsync();
-
-                if (storedLinks.Count == 0)
-                {
-                    userRoleIdCheck = "no link found";
-                    userRoleIdMatches = false;
-                }
-                else
-                {
-                    var link = storedLinks[0];
-                    var probe = new IdentityUserRole<string> { UserId = link.UserId, RoleId = link.RoleId };
-                    Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<IdentityUserRole<string>>? entry = null;
-                    string? generatedId = null;
-                    string? idPropertyName = null;
-                    try
-                    {
-                        entry = db.Add(probe);
-                        var idProperty = entry.Metadata.GetProperties()
-                            .FirstOrDefault(p => CosmosPropertyExtensions.GetJsonPropertyName(p) == "id");
-                        if (idProperty != null)
-                        {
-                            idPropertyName = idProperty.Name;
-                            generatedId = entry.Property(idPropertyName).CurrentValue?.ToString();
-                        }
-                    }
-                    finally
-                    {
-                        if (entry != null)
-                        {
-                            entry.State = EntityState.Detached;
-                        }
-                    }
-
-                    string? storedId = null;
-                    if (!string.IsNullOrEmpty(idPropertyName))
-                    {
-                        storedId = await db.Set<IdentityUserRole<string>>()
-                            .AsNoTracking()
-                            .Where(ur => ur.UserId == link.UserId && ur.RoleId == link.RoleId)
-                            .Select(ur => EF.Property<string>(ur, idPropertyName))
-                            .FirstOrDefaultAsync();
-                    }
-
-                    userRoleGeneratedId = generatedId;
-                    userRoleStoredId = storedId;
-                    userRoleIdMatches = generatedId != null && storedId != null && generatedId == storedId;
-                    userRoleIdCheck = userRoleIdMatches == true ? "matches" : "mismatch";
-                }
-            }
-
-            if (testUpdate == true)
-            {
-                var updateResult = await userManager.UpdateAsync(user);
-                return Results.Ok(new
-                {
-                    provider,
-                    userFound = true,
-                    userId = user.Id,
-                    userName = user.UserName,
-                    roles,
-                    isInFirstRole,
-                    userRoleIdCheck,
-                    userRoleGeneratedId,
-                    userRoleStoredId,
-                    userRoleIdMatches,
-                    updateSucceeded = updateResult.Succeeded,
-                    updateErrors = updateResult.Succeeded ? null : updateResult.Errors.Select(e => e.Description).ToArray()
-                });
-            }
-
-            return Results.Ok(new
-            {
-                provider,
-                userFound = true,
-                userId = user.Id,
-                userName = user.UserName,
-                roles,
-                isInFirstRole,
-                userRoleIdCheck,
-                userRoleGeneratedId,
-                userRoleStoredId,
-                userRoleIdMatches
-            });
-        }
-        catch (Exception ex)
-        {
-            return Results.Json(new
-            {
-                provider,
-                error = ex.Message
-            }, statusCode: StatusCodes.Status500InternalServerError);
-        }
-    }).AllowAnonymous();
+    app.MapCosmosDevEndpoints();
 }
 
 app.MapFallbackToFile("/index.html");
