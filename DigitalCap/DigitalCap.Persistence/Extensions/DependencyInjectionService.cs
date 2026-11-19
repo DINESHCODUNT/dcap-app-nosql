@@ -120,6 +120,8 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<CosmosTankRepository>();
             services.AddScoped<ReportPartRepository>();
             services.AddScoped<CosmosReportPartRepository>();
+            services.AddScoped<SurveyReportRepository>();
+            services.AddScoped<CosmosSurveyReportRepository>();
 
             if (string.Equals(dataProviderDefault, "Cosmos", StringComparison.OrdinalIgnoreCase))
             {
@@ -146,6 +148,7 @@ namespace DigitalCap.Persistence.Extensions
                 services.AddScoped<IGradingRepository, CosmosGradingRepository>();
                 services.AddScoped<ITankRepository, CosmosTankRepository>();
                 services.AddScoped<IReportPartRepository, CosmosReportPartRepository>();
+                services.AddScoped<ISurveyReportRepository, CosmosSurveyReportRepository>();
             }
             services.AddHttpClient(); // Add this
             services.AddScoped<IHttpService, HttpService>();

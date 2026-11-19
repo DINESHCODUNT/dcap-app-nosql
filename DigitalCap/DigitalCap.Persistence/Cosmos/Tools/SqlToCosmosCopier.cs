@@ -214,6 +214,7 @@ namespace DigitalCap.Persistence.Cosmos.Tools
             using var semaphore = new SemaphoreSlim(20, 20);
             var tasks = new List<Task>();
             var sw = Stopwatch.StartNew();
+            var allowLowercaseId = pkColumns.Count == 1 && string.Equals(pkColumns[0], "id", StringComparison.Ordinal);
 
             foreach (var row in rows)
             {
@@ -223,7 +224,7 @@ namespace DigitalCap.Persistence.Cosmos.Tools
                 var dict = (IDictionary<string, object>)row;
 
                 // 4. Case-sensitive check for column named "id"
-                if (dict.Keys.Any(k => string.Equals(k, "id", StringComparison.Ordinal)))
+                if (!allowLowercaseId && dict.Keys.Any(k => string.Equals(k, "id", StringComparison.Ordinal)))
                 {
                     throw new InvalidOperationException($"Table [{tableInfo.Schema}].[{tableInfo.Table}] has a column named lowercase 'id', which conflicts with Cosmos id.");
                 }

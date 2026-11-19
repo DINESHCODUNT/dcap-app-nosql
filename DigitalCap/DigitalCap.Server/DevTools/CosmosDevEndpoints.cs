@@ -169,6 +169,7 @@ namespace DigitalCap.Server.DevTools
             MapParityBatch6(app);
             MapParityBatch7(app);
             MapParityBatch8(app);
+            MapParityBatch9(app);
             MapDevCopyTable(app);
             return app;
         }
@@ -7622,6 +7623,1481 @@ namespace DigitalCap.Server.DevTools
                     writeSteps
                 });
             }).AllowAnonymous();
+        }
+
+        private static void MapParityBatch9(WebApplication app)
+        {
+            app.MapGet("/health/parity/batch9", async (
+                string? writeTest,
+                IConfiguration config,
+                IServiceProvider sp) =>
+            {
+                var sqlRepo = sp.GetRequiredService<SurveyReportRepository>();
+                var cosmosRepo = sp.GetRequiredService<CosmosSurveyReportRepository>();
+                var containerFactory = sp.GetRequiredService<ICosmosContainerFactory>();
+                var db = sp.GetRequiredService<ApplicationDbContext>();
+                var conn = db.Database.GetDbConnection();
+                if (conn.State != System.Data.ConnectionState.Open)
+                {
+                    await conn.OpenAsync();
+                }
+                var checks = new List<object>();
+                var writeSteps = new List<object>();
+                bool allPassed = true;
+                bool hadException = false;
+
+                var cs = config.GetConnectionString("DefaultConnection");
+
+                var ptmContainer = containerFactory.GetContainer(CosmosContainers.dbo_ProjectTemplateMapping);
+                var picContainer = containerFactory.GetContainer(CosmosContainers.dbo_ProjectImageCards);
+                var pgmContainer = containerFactory.GetContainer(CosmosContainers.dbo_ProjectGradingMapping);
+                var pgcmContainer = containerFactory.GetContainer(CosmosContainers.dbo_ProjectGradingConditionMapping);
+                var hiContainer = containerFactory.GetContainer(CosmosContainers.dbo_H_IReportTemplate);
+                var ticContainer = containerFactory.GetContainer(CosmosContainers.dbo_TankImageCard);
+                var gicContainer = containerFactory.GetContainer(CosmosContainers.dbo_GenericImageCard);
+                var hipgContainer = containerFactory.GetContainer(CosmosContainers.dbo_HandIProjectGrading);
+                var hipgcContainer = containerFactory.GetContainer(CosmosContainers.dbo_HandIProjectGradingConditions);
+                var buContainer = containerFactory.GetContainer(CosmosContainers.dbo_BulkUpload);
+                var clContainer = containerFactory.GetContainer(CosmosContainers.upskill_CapLog);
+                var idContainer = containerFactory.GetContainer(CosmosContainers.upskill_ImageData);
+                var imgContainer = containerFactory.GetContainer(CosmosContainers.upskill_Images);
+                var rtContainer = containerFactory.GetContainer(CosmosContainers.dbo_ReportTemplate);
+                var ccContainer = containerFactory.GetContainer(CosmosContainers.dbo_CurrentCondition);
+                var rtsContainer = containerFactory.GetContainer(CosmosContainers.dbo_ReportTemplateSection);
+                var icContainer = containerFactory.GetContainer(CosmosContainers.dbo_ImageCard);
+                var tsmContainer = containerFactory.GetContainer(CosmosContainers.dbo_TemplateSectionMapping);
+                var subContainer = containerFactory.GetContainer(CosmosContainers.dbo_SubSection);
+
+                var methodPositiveRows = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "GetReportTemplateList", 0 },
+                    { "GetCurrentCondition", 0 },
+                    { "GetBulkUploadUnplacedImages", 0 },
+                    { "GetTemplateTitle", 0 },
+                    { "GetTemplateSections", 0 },
+                    { "GetTemplatSections", 0 },
+                    { "GetImageCard", 0 },
+                    { "GetExistingReportPartsSectionIds", 0 },
+                    { "GetHIReport", 0 },
+                    { "GetProjectReportTemplate.2Args", 0 },
+                    { "GetProjectReportTemplate.3Args", 0 },
+                    { "GetProjectGrading", 0 },
+                    { "GetTemplatGradings", 0 },
+                    { "GetGradingCondition", 0 },
+                    { "GetProjectImageCard", 0 },
+                    { "GetProjectGradingConditionMapping", 0 },
+                    { "GetProjectGradingById", 0 },
+                    { "GetProjectImagCardById", 0 }
+                };
+
+                static bool ApproxDateEquals(DateTime? d1, DateTime? d2)
+                {
+                    if (!d1.HasValue && !d2.HasValue) return true;
+                    if (!d1.HasValue || !d2.HasValue) return false;
+                    return Math.Abs((d1.Value - d2.Value).TotalMilliseconds) < 1000;
+                }
+
+                static bool CompareHIReports(HandIReport? s, HandIReport? c)
+                {
+                    if (s == null && c == null) return true;
+                    if (s == null || c == null) return false;
+                    return s.Id == c.Id
+                        && s.ProjectId == c.ProjectId
+                        && s.SectionId == c.SectionId
+                        && string.Equals(s.CompanyName?.TrimEnd(' '), c.CompanyName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.CertificateNumber?.TrimEnd(' '), c.CertificateNumber?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && ApproxDateEquals(s.ExpiryDate, c.ExpiryDate)
+                        && string.Equals(s.ThicknessMeasurementA?.TrimEnd(' '), c.ThicknessMeasurementA?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.ThicknessMeasurementB?.TrimEnd(' '), c.ThicknessMeasurementB?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.ThicknessMeasurementC?.TrimEnd(' '), c.ThicknessMeasurementC?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.AdditionalSurveyorComments?.TrimEnd(' '), c.AdditionalSurveyorComments?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.MaintenanceExecuted?.TrimEnd(' '), c.MaintenanceExecuted?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.Accommodation?.TrimEnd(' '), c.Accommodation?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.PhotoGraphs?.TrimEnd(' '), c.PhotoGraphs?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.OperationalTestLocation?.TrimEnd(' '), c.OperationalTestLocation?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && ApproxDateEquals(s.OperationalTestStart, c.OperationalTestStart)
+                        && ApproxDateEquals(s.OperationalTestFinish, c.OperationalTestFinish)
+                        && string.Equals(s.OptionalTestSatisFactory?.TrimEnd(' '), c.OptionalTestSatisFactory?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.AssociatedReportNumber?.TrimEnd(' '), c.AssociatedReportNumber?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.AssociatedReportDate?.TrimEnd(' '), c.AssociatedReportDate?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.Remarks?.TrimEnd(' '), c.Remarks?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.LeadSurveyorName?.TrimEnd(' '), c.LeadSurveyorName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.LeadSurveyorNumber?.TrimEnd(' '), c.LeadSurveyorNumber?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.SurveyorName?.TrimEnd(' '), c.SurveyorName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.SurveyorNumber?.TrimEnd(' '), c.SurveyorNumber?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && ApproxDateEquals(s.LastVisitDate, c.LastVisitDate)
+                        && string.Equals(s.IndividualA?.TrimEnd(' '), c.IndividualA?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.IndividualB?.TrimEnd(' '), c.IndividualB?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.IndividualC?.TrimEnd(' '), c.IndividualC?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.IndividualD?.TrimEnd(' '), c.IndividualD?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.IndividualE?.TrimEnd(' '), c.IndividualE?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(s.IndividualF?.TrimEnd(' '), c.IndividualF?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                        && s.SubstantialCorrosionRemaining == c.SubstantialCorrosionRemaining
+                        && s.StatutoryDeficiencies == c.StatutoryDeficiencies
+                        && s.FoundSatisfactory == c.FoundSatisfactory
+                        && s.UnderRemarks == c.UnderRemarks
+                        && s.ScouringOrPitting == c.ScouringOrPitting
+                        && s.BottomPlattingScouringOrPitting == c.BottomPlattingScouringOrPitting
+                        && s.IsActive == c.IsActive
+                        && s.IsDeleted == c.IsDeleted;
+                }
+
+                // =========================================================================
+                // 1. READ CHECKS
+                // =========================================================================
+
+                // 1.1 Trap 6 static helper fixed cases (calling repository's own helper per T12)
+                try
+                {
+                    string? t6_null = null;
+                    string? t6_null_res = CosmosSurveyReportRepository.TransformGradingValue(t6_null);
+                    bool t6_null_ok = t6_null_res == null;
+
+                    string t6_empty = "";
+                    string? t6_empty_res = CosmosSurveyReportRepository.TransformGradingValue(t6_empty);
+                    bool t6_empty_ok = t6_empty_res == "";
+
+                    string t6_19 = "1234567890123456789";
+                    string? t6_19_res = CosmosSurveyReportRepository.TransformGradingValue(t6_19);
+                    bool t6_19_ok = t6_19_res == "1234567890123456789";
+
+                    string t6_20_no_sp = "12345678901234567890";
+                    string? t6_20_res = CosmosSurveyReportRepository.TransformGradingValue(t6_20_no_sp);
+                    bool t6_20_ok = t6_20_res == "1234567890 123456789";
+
+                    string t6_25_no_sp = "1234567890123456789012345";
+                    string? t6_25_res = CosmosSurveyReportRepository.TransformGradingValue(t6_25_no_sp);
+                    bool t6_25_ok = t6_25_res == "123456789012 3456789";
+
+                    string t6_25_sp = "1234567890 12345678901234";
+                    string? t6_25_sp_res = CosmosSurveyReportRepository.TransformGradingValue(t6_25_sp);
+                    bool t6_25_sp_ok = t6_25_sp_res == "1234567890 123456789";
+
+                    string t6_20_trail = "12345678901234567890   ";
+                    string? t6_20_trail_res = CosmosSurveyReportRepository.TransformGradingValue(t6_20_trail);
+                    bool t6_20_trail_ok = t6_20_trail_res == "12345678901234567890";
+
+                    bool t6_all = t6_null_ok && t6_empty_ok && t6_19_ok && t6_20_ok && t6_25_ok && t6_25_sp_ok && t6_20_trail_ok;
+                    checks.Add(new { method = "Trap6.TransformGradingValue", equal = t6_all, t6_null_ok, t6_empty_ok, t6_19_ok, t6_20_ok, t6_25_ok, t6_25_sp_ok, t6_20_trail_ok });
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { method = "Trap6.TransformGradingValue", equal = false, error = ex.Message });
+                }
+
+                // 1.2 GetReportTemplateList (T1: both empty is fail on real input)
+                try
+                {
+                    var sqlTemplates = await sqlRepo.GetReportTemplateList();
+                    var cosTemplates = await cosmosRepo.GetReportTemplateList();
+                    bool listEq = sqlTemplates.Count > 0
+                        && sqlTemplates.Count == cosTemplates.Count
+                        && sqlTemplates.OrderBy(x => x.Id).Zip(cosTemplates.OrderBy(x => x.Id))
+                            .All(p => p.First.Id == p.Second.Id && string.Equals(p.First.Name?.TrimEnd(' '), p.Second.Name?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
+                    if (sqlTemplates.Count > 0) methodPositiveRows["GetReportTemplateList"] += sqlTemplates.Count;
+                    checks.Add(new { method = "GetReportTemplateList", equal = listEq, sqlCount = sqlTemplates.Count, cosmosCount = cosTemplates.Count });
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { method = "GetReportTemplateList", equal = false, error = ex.Message });
+                }
+
+                // 1.3 GetCurrentCondition (T1)
+                try
+                {
+                    var sqlConds = await sqlRepo.GetCurrentCondition();
+                    var cosConds = await cosmosRepo.GetCurrentCondition();
+                    bool condEq = sqlConds.Count > 0
+                        && sqlConds.Count == cosConds.Count
+                        && sqlConds.OrderBy(x => x.Id).Zip(cosConds.OrderBy(x => x.Id))
+                            .All(p => p.First.Id == p.Second.Id && string.Equals(p.First.Name?.TrimEnd(' '), p.Second.Name?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
+                    if (sqlConds.Count > 0) methodPositiveRows["GetCurrentCondition"] += sqlConds.Count;
+                    checks.Add(new { method = "GetCurrentCondition", equal = condEq, sqlCount = sqlConds.Count, cosmosCount = cosConds.Count });
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { method = "GetCurrentCondition", equal = false, error = ex.Message });
+                }
+
+                // 1.4 GetBulkUploadUnplacedImages (SHA256 comparison + dates per T8, T1)
+                try
+                {
+                    var sqlBulk = await sqlRepo.GetBulkUploadUnplacedImages();
+                    var cosBulk = await cosmosRepo.GetBulkUploadUnplacedImages();
+                    bool bulkEq = sqlBulk.Count > 0 && sqlBulk.Count == cosBulk.Count;
+                    if (bulkEq)
+                    {
+                        var sqlH = sqlBulk.Select(b => new { b.Id, b.ImageId, b.ProjectId, Len = b.Base64String?.Length ?? 0, Hash = ComputeSha256(b.Base64String), b.CreateDttm, b.UpdateDttm })
+                            .OrderBy(x => x.Id).ThenBy(x => x.ImageId).ToList();
+                        var cosH = cosBulk.Select(b => new { b.Id, b.ImageId, b.ProjectId, Len = b.Base64String?.Length ?? 0, Hash = ComputeSha256(b.Base64String), b.CreateDttm, b.UpdateDttm })
+                            .OrderBy(x => x.Id).ThenBy(x => x.ImageId).ToList();
+                        bulkEq = sqlH.Zip(cosH).All(p => p.First.Id == p.Second.Id && p.First.ImageId == p.Second.ImageId && p.First.Len == p.Second.Len && p.First.Hash == p.Second.Hash
+                            && ApproxDateEquals(p.First.CreateDttm, p.Second.CreateDttm) && ApproxDateEquals(p.First.UpdateDttm, p.Second.UpdateDttm));
+                    }
+                    if (sqlBulk.Count > 0) methodPositiveRows["GetBulkUploadUnplacedImages"] += sqlBulk.Count;
+                    checks.Add(new { method = "GetBulkUploadUnplacedImages", equal = bulkEq, sqlCount = sqlBulk.Count, cosmosCount = cosBulk.Count });
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { method = "GetBulkUploadUnplacedImages", equal = false, error = ex.Message });
+                }
+
+                // 1.5 Template queries for all template IDs in SQL
+                List<int> templateIds = new List<int>();
+                List<int> icTemplateIds = new List<int>();
+                try
+                {
+                    templateIds = (await conn.QueryAsync<int>("SELECT DISTINCT TemplateId FROM [dbo].[TemplateSectionMapping] WHERE TemplateId IS NOT NULL")).ToList();
+                    icTemplateIds = (await conn.QueryAsync<int>("SELECT DISTINCT TemplateId FROM [dbo].[ImageCard] WHERE TemplateId IS NOT NULL")).ToList();
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { method = "Setup.GetTemplateIds", equal = false, error = ex.Message });
+                }
+
+                // Add missing template (-99999)
+                var templatesToTest = new List<int>(templateIds);
+                templatesToTest.Add(-99999);
+
+                foreach (var tid in templatesToTest)
+                {
+                    bool isMissingTid = tid == -99999;
+
+                    // GetTemplateTitle
+                    try
+                    {
+                        var sqlTitle = await sqlRepo.GetTemplateTitle(tid);
+                        var cosTitle = await cosmosRepo.GetTemplateTitle(tid);
+                        bool titleEq = isMissingTid
+                            ? (sqlTitle == null && cosTitle == null)
+                            : (sqlTitle != null && cosTitle != null && sqlTitle.Id == cosTitle.Id && string.Equals(sqlTitle.SectionName?.TrimEnd(' '), cosTitle.SectionName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
+                        if (sqlTitle != null) methodPositiveRows["GetTemplateTitle"]++;
+                        checks.Add(new { method = "GetTemplateTitle", templateId = tid, equal = titleEq });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetTemplateTitle", templateId = tid, equal = false, error = ex.Message });
+                    }
+
+                    // GetTemplateSections
+                    try
+                    {
+                        var sqlSecs = await sqlRepo.GetTemplateSections(tid);
+                        var cosSecs = await cosmosRepo.GetTemplateSections(tid);
+                        bool secsEq = isMissingTid
+                            ? (sqlSecs.Count == 0 && cosSecs.Count == 0)
+                            : (sqlSecs.Count > 0 && sqlSecs.Count == cosSecs.Count);
+                        if (secsEq && !isMissingTid)
+                        {
+                            var sOrder = sqlSecs.OrderBy(s => s.Id).ThenBy(s => s.SectionId).ThenBy(s => s.SectionName).ToList();
+                            var cOrder = cosSecs.OrderBy(s => s.Id).ThenBy(s => s.SectionId).ThenBy(s => s.SectionName).ToList();
+                            secsEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                && p.First.SectionId == p.Second.SectionId
+                                && string.Equals(p.First.SectionName?.TrimEnd(' '), p.Second.SectionName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                && p.First.HasSubSection == p.Second.HasSubSection
+                                && string.Equals(p.First.SubSectionName?.TrimEnd(' '), p.Second.SubSectionName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                && string.Equals(p.First.SpecialSectionName?.TrimEnd(' '), p.Second.SpecialSectionName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
+                        }
+                        if (sqlSecs.Count > 0) methodPositiveRows["GetTemplateSections"] += sqlSecs.Count;
+                        checks.Add(new { method = "GetTemplateSections", templateId = tid, equal = secsEq, sqlCount = sqlSecs.Count, cosmosCount = cosSecs.Count });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetTemplateSections", templateId = tid, equal = false, error = ex.Message });
+                    }
+
+                    // GetTemplatSections
+                    try
+                    {
+                        var sqlSecs = await sqlRepo.GetTemplatSections(tid);
+                        var cosSecs = await cosmosRepo.GetTemplatSections(tid);
+                        bool secsEq = isMissingTid
+                            ? (sqlSecs.Count == 0 && cosSecs.Count == 0)
+                            : (sqlSecs.Count > 0 && sqlSecs.Count == cosSecs.Count);
+                        if (secsEq && !isMissingTid)
+                        {
+                            var sOrder = sqlSecs.OrderBy(s => s.Id).ThenBy(s => s.SectionId).ThenBy(s => s.SectionName).ToList();
+                            var cOrder = cosSecs.OrderBy(s => s.Id).ThenBy(s => s.SectionId).ThenBy(s => s.SectionName).ToList();
+                            secsEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                && p.First.SectionId == p.Second.SectionId
+                                && string.Equals(p.First.SectionName?.TrimEnd(' '), p.Second.SectionName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                && p.First.HasSubSection == p.Second.HasSubSection
+                                && string.Equals(p.First.SubSectionName?.TrimEnd(' '), p.Second.SubSectionName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                && string.Equals(p.First.SpecialSectionName?.TrimEnd(' '), p.Second.SpecialSectionName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
+                        }
+                        if (sqlSecs.Count > 0) methodPositiveRows["GetTemplatSections"] += sqlSecs.Count;
+                        checks.Add(new { method = "GetTemplatSections", templateId = tid, equal = secsEq, sqlCount = sqlSecs.Count, cosmosCount = cosSecs.Count });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetTemplatSections", templateId = tid, equal = false, error = ex.Message });
+                    }
+                }
+
+                // GetImageCard on templates that have image cards, plus missing template -99999
+                var icTemplatesToTest = new List<int>(icTemplateIds);
+                icTemplatesToTest.Add(-99999);
+                foreach (var tid in icTemplatesToTest)
+                {
+                    try
+                    {
+                        var sqlCards = await sqlRepo.GetImageCard(tid);
+                        var cosCards = await cosmosRepo.GetImageCard(tid);
+                        bool isMissing = tid == -99999;
+                        bool cardsEq = isMissing
+                            ? (sqlCards.Count == 0 && cosCards.Count == 0)
+                            : (sqlCards.Count > 0 && sqlCards.Count == cosCards.Count);
+                        if (cardsEq && !isMissing)
+                        {
+                            var sOrder = sqlCards.OrderBy(c => c.Id).ToList();
+                            var cOrder = cosCards.OrderBy(c => c.Id).ToList();
+                            cardsEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                && p.First.SectionId == p.Second.SectionId
+                                && string.Equals(p.First.FileName?.TrimEnd(' '), p.Second.FileName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                && p.First.CurrentCondition == p.Second.CurrentCondition);
+                        }
+                        if (sqlCards.Count > 0) methodPositiveRows["GetImageCard"] += sqlCards.Count;
+                        checks.Add(new { method = "GetImageCard", templateId = tid, equal = cardsEq, sqlCount = sqlCards.Count, cosmosCount = cosCards.Count });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetImageCard", templateId = tid, equal = false, error = ex.Message });
+                    }
+                }
+
+                // 1.6 First 25 projects with ProjectTemplateMapping rows x their templates
+                List<(int ProjectId, int TemplateId)> projectTemplates = new List<(int, int)>();
+                try
+                {
+                    projectTemplates = (await conn.QueryAsync<(int ProjectId, int TemplateId)>(
+                        "SELECT DISTINCT TOP 25 ProjectId, TemplateId FROM [dbo].[ProjectTemplateMapping] WHERE ProjectId IS NOT NULL AND TemplateId IS NOT NULL AND IsDeleted = 0 ORDER BY ProjectId, TemplateId")).ToList();
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { method = "Setup.GetProjectTemplates", equal = false, error = ex.Message });
+                }
+
+                var distinctProjects = projectTemplates.Select(pt => pt.ProjectId).Distinct().ToList();
+                distinctProjects.Add(-99999); // +1 missing project
+
+                foreach (var pid in distinctProjects)
+                {
+                    // GetExistingReportPartsSectionIds
+                    try
+                    {
+                        var sqlIds = await sqlRepo.GetExistingReportPartsSectionIds(pid);
+                        var cosIds = await cosmosRepo.GetExistingReportPartsSectionIds(pid);
+                        bool isMissingPid = pid == -99999;
+                        bool idsEq = isMissingPid
+                            ? (sqlIds.Count == 0 && cosIds.Count == 0)
+                            : (sqlIds.Count > 0 && sqlIds.Count == cosIds.Count && sqlIds.OrderBy(x => x).SequenceEqual(cosIds.OrderBy(x => x)));
+                        if (sqlIds.Count > 0) methodPositiveRows["GetExistingReportPartsSectionIds"] += sqlIds.Count;
+                        checks.Add(new { method = "GetExistingReportPartsSectionIds", projectId = pid, equal = idsEq, sqlCount = sqlIds.Count, cosmosCount = cosIds.Count });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetExistingReportPartsSectionIds", projectId = pid, equal = false, error = ex.Message });
+                    }
+                }
+
+                // Dedicated GetHIReport check on projects with H&I reports (T8, T9)
+                List<int> hiProjectIds = new List<int>();
+                try
+                {
+                    hiProjectIds = (await conn.QueryAsync<int>("SELECT DISTINCT ProjectId FROM [dbo].[H_IReportTemplate] WHERE ProjectId IS NOT NULL AND IsDeleted = 0")).ToList();
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { method = "Setup.GetHiProjectIds", equal = false, error = ex.Message });
+                }
+                var hiProjectsToTest = new List<int>(hiProjectIds.Take(25));
+                hiProjectsToTest.Add(-99999); // missing project
+
+                foreach (var pid in hiProjectsToTest)
+                {
+                    try
+                    {
+                        var sqlHi = await sqlRepo.GetHIReport(pid);
+                        var cosHi = await cosmosRepo.GetHIReport(pid);
+                        bool isMissing = pid == -99999;
+                        bool hiEq = isMissing
+                            ? (sqlHi == null && cosHi == null)
+                            : (sqlHi != null && cosHi != null && CompareHIReports(sqlHi, cosHi));
+                        if (sqlHi != null) methodPositiveRows["GetHIReport"]++;
+                        checks.Add(new { method = "GetHIReport", projectId = pid, equal = hiEq });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetHIReport", projectId = pid, equal = false, error = ex.Message });
+                    }
+                }
+
+                // Check Trap 21 multi-row projects for GetHIReport (T9: all multi-row projects, remove Take(10), all columns)
+                try
+                {
+                    var multiRowProjects = (await conn.QueryAsync<int>(
+                        "SELECT ProjectId FROM [dbo].[H_IReportTemplate] WHERE IsActive=1 AND IsDeleted=0 GROUP BY ProjectId HAVING COUNT(1) > 1")).ToList();
+                    foreach (var mPid in multiRowProjects)
+                    {
+                        var sqlHi = await sqlRepo.GetHIReport(mPid);
+                        var cosHi = await cosmosRepo.GetHIReport(mPid);
+                        bool multiHiEq = sqlHi != null && cosHi != null && CompareHIReports(sqlHi, cosHi);
+                        if (sqlHi != null) methodPositiveRows["GetHIReport"]++;
+                        checks.Add(new { method = "GetHIReport.MultiRowLowestIdCheck", projectId = mPid, equal = multiHiEq, sqlId = sqlHi?.Id, cosId = cosHi?.Id });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { method = "GetHIReport.MultiRowLowestIdCheck", equal = false, error = ex.Message });
+                }
+
+                foreach (var pt in projectTemplates)
+                {
+                    int pid = pt.ProjectId;
+                    int tid = pt.TemplateId;
+
+                    // GetProjectReportTemplate (2 args)
+                    try
+                    {
+                        var sqlPrt = await sqlRepo.GetProjectReportTemplate(pid, tid);
+                        var cosPrt = await cosmosRepo.GetProjectReportTemplate(pid, tid);
+                        bool prtEq = sqlPrt.Count > 0 && sqlPrt.Count == cosPrt.Count;
+                        if (prtEq)
+                        {
+                            var sOrder = sqlPrt.OrderBy(x => x.Id).ToList();
+                            var cOrder = cosPrt.OrderBy(x => x.Id).ToList();
+                            prtEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                && p.First.ProjectId == p.Second.ProjectId
+                                && p.First.TemplateId == p.Second.TemplateId
+                                && p.First.SectionId == p.Second.SectionId
+                                && string.Equals(p.First.Notes?.TrimEnd(' '), p.Second.Notes?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                && ApproxDateEquals(p.First.CreatedDttm, p.Second.CreatedDttm)
+                                && ApproxDateEquals(p.First.UpdateDttm, p.Second.UpdateDttm)
+                                && p.First.IsDeleted == p.Second.IsDeleted);
+                        }
+                        if (sqlPrt.Count > 0) methodPositiveRows["GetProjectReportTemplate.2Args"] += sqlPrt.Count;
+                        checks.Add(new { method = "GetProjectReportTemplate.2Args", projectId = pid, templateId = tid, equal = prtEq, sqlCount = sqlPrt.Count, cosmosCount = cosPrt.Count });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetProjectReportTemplate.2Args", projectId = pid, templateId = tid, equal = false, error = ex.Message });
+                    }
+
+                    // GetTemplatGradings (T10: ordered by SqlGuid SectionId then LabelName; rows with the same key compare as a set)
+                    try
+                    {
+                        var sqlTg = await sqlRepo.GetTemplatGradings(tid, pid);
+                        var cosTg = await cosmosRepo.GetTemplatGradings(tid, pid);
+                        bool tgEq = sqlTg.Count == cosTg.Count;
+                        if (tgEq && sqlTg.Count > 0)
+                        {
+                            var sqlGroups = sqlTg.GroupBy(x => (x.SectionId, Label: x.LabelName?.TrimEnd(' ')))
+                                .ToDictionary(g => g.Key, g => g.Select(x => x.Id).OrderBy(id => id).ToList());
+                            var cosGroups = cosTg.GroupBy(x => (x.SectionId, Label: x.LabelName?.TrimEnd(' ')))
+                                .ToDictionary(g => g.Key, g => g.Select(x => x.Id).OrderBy(id => id).ToList());
+                            if (sqlGroups.Count != cosGroups.Count) tgEq = false;
+                            else
+                            {
+                                foreach (var kvp in sqlGroups)
+                                {
+                                    if (!cosGroups.TryGetValue(kvp.Key, out var cList) || !kvp.Value.SequenceEqual(cList))
+                                    {
+                                        tgEq = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (sqlTg.Count > 0) methodPositiveRows["GetTemplatGradings"] += sqlTg.Count;
+                        checks.Add(new { method = "GetTemplatGradings", projectId = pid, templateId = tid, equal = tgEq, sqlCount = sqlTg.Count, cosmosCount = cosTg.Count });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetTemplatGradings", projectId = pid, templateId = tid, equal = false, error = ex.Message });
+                    }
+
+                    // GetGradingCondition
+                    try
+                    {
+                        var sqlGc = await sqlRepo.GetGradingCondition(tid, pid);
+                        var cosGc = await cosmosRepo.GetGradingCondition(tid, pid);
+                        bool gcEq = sqlGc.Count == cosGc.Count;
+                        if (gcEq && sqlGc.Count > 0)
+                        {
+                            var sOrder = sqlGc.OrderBy(x => x.Id).ThenBy(x => x.GradingId).ThenBy(x => x.SectionId).ToList();
+                            var cOrder = cosGc.OrderBy(x => x.Id).ThenBy(x => x.GradingId).ThenBy(x => x.SectionId).ToList();
+                            gcEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                && p.First.GradingId == p.Second.GradingId
+                                && p.First.SectionId == p.Second.SectionId
+                                && string.Equals(p.First.Condition?.TrimEnd(' '), p.Second.Condition?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
+                        }
+                        if (sqlGc.Count > 0) methodPositiveRows["GetGradingCondition"] += sqlGc.Count;
+                        checks.Add(new { method = "GetGradingCondition", projectId = pid, templateId = tid, equal = gcEq, sqlCount = sqlGc.Count, cosmosCount = cosGc.Count });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { method = "GetGradingCondition", projectId = pid, templateId = tid, equal = false, error = ex.Message });
+                    }
+
+                    // Query real SectionIds for this project and template (T3: no empty catch)
+                    List<Guid> sectionGuids = new List<Guid>();
+                    try
+                    {
+                        sectionGuids = (await conn.QueryAsync<Guid>(
+                            "SELECT DISTINCT SectionId FROM [dbo].[ProjectTemplateMapping] WHERE ProjectId=@pid AND TemplateId=@tid AND SectionId IS NOT NULL AND IsDeleted=0",
+                            new { pid, tid })).ToList();
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { method = "Setup.GetSectionGuids", projectId = pid, templateId = tid, equal = false, error = ex.Message });
+                    }
+
+                    // T2: Test Guid.Empty for EVERY project/template (add it after Take(3), not before)
+                    var sectionsToTest = sectionGuids.Take(3).ToList();
+                    sectionsToTest.Add(Guid.Empty);
+
+                    foreach (var sec in sectionsToTest)
+                    {
+                        bool isMissingSec = sec == Guid.Empty;
+
+                        // GetProjectReportTemplate (3 args)
+                        try
+                        {
+                            var sqlPrt3 = await sqlRepo.GetProjectReportTemplate(pid, tid, sec);
+                            var cosPrt3 = await cosmosRepo.GetProjectReportTemplate(pid, tid, sec);
+                            bool prt3Eq = isMissingSec
+                                ? (sqlPrt3 == null && cosPrt3 == null)
+                                : (sqlPrt3 != null && cosPrt3 != null
+                                    && sqlPrt3.Id == cosPrt3.Id
+                                    && sqlPrt3.ProjectId == cosPrt3.ProjectId
+                                    && sqlPrt3.TemplateId == cosPrt3.TemplateId
+                                    && sqlPrt3.SectionId == cosPrt3.SectionId
+                                    && string.Equals(sqlPrt3.Notes?.TrimEnd(' '), cosPrt3.Notes?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                    && ApproxDateEquals(sqlPrt3.CreatedDttm, cosPrt3.CreatedDttm)
+                                    && ApproxDateEquals(sqlPrt3.UpdateDttm, cosPrt3.UpdateDttm)
+                                    && sqlPrt3.IsDeleted == cosPrt3.IsDeleted);
+                            if (sqlPrt3 != null) methodPositiveRows["GetProjectReportTemplate.3Args"]++;
+                            checks.Add(new { method = "GetProjectReportTemplate.3Args", projectId = pid, templateId = tid, sectionId = sec, equal = prt3Eq });
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { method = "GetProjectReportTemplate.3Args", projectId = pid, templateId = tid, sectionId = sec, equal = false, error = ex.Message });
+                        }
+
+                        // GetProjectGrading
+                        try
+                        {
+                            var sqlPg = await sqlRepo.GetProjectGrading(pid, tid, sec);
+                            var cosPg = await cosmosRepo.GetProjectGrading(pid, tid, sec);
+                            bool pgEq = isMissingSec
+                                ? (sqlPg.Count == 0 && cosPg.Count == 0)
+                                : (sqlPg.Count > 0 && sqlPg.Count == cosPg.Count);
+                            if (pgEq && !isMissingSec)
+                            {
+                                var sOrder = sqlPg.OrderBy(x => x.Id).ToList();
+                                var cOrder = cosPg.OrderBy(x => x.Id).ToList();
+                                pgEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                    && p.First.ProjectId == p.Second.ProjectId
+                                    && p.First.TemplateId == p.Second.TemplateId
+                                    && p.First.SectionId == p.Second.SectionId
+                                    && p.First.GradingId == p.Second.GradingId
+                                    && string.Equals(p.First.Value?.TrimEnd(' '), p.Second.Value?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                    && ApproxDateEquals(p.First.CreatedDttm, p.Second.CreatedDttm)
+                                    && ApproxDateEquals(p.First.UpdatedDttm, p.Second.UpdatedDttm)
+                                    && p.First.IsDeleted == p.Second.IsDeleted);
+                            }
+                            if (sqlPg.Count > 0) methodPositiveRows["GetProjectGrading"] += sqlPg.Count;
+                            checks.Add(new { method = "GetProjectGrading", projectId = pid, templateId = tid, sectionId = sec, equal = pgEq, sqlCount = sqlPg?.Count, cosmosCount = cosPg?.Count });
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { method = "GetProjectGrading", projectId = pid, templateId = tid, sectionId = sec, equal = false, error = ex.Message });
+                        }
+
+                        // GetProjectImageCard (T8: Src length + SHA-256)
+                        try
+                        {
+                            var sqlPic = await sqlRepo.GetProjectImageCard(pid, tid, sec);
+                            var cosPic = await cosmosRepo.GetProjectImageCard(pid, tid, sec);
+                            bool picEq = isMissingSec
+                                ? (sqlPic.Count == 0 && cosPic.Count == 0)
+                                : (sqlPic.Count > 0 && sqlPic.Count == cosPic.Count);
+                            if (picEq && !isMissingSec)
+                            {
+                                var sOrder = sqlPic.OrderBy(x => x.Id).ThenBy(x => x.CardId).ToList();
+                                var cOrder = cosPic.OrderBy(x => x.Id).ThenBy(x => x.CardId).ToList();
+                                picEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                    && p.First.ProjectId == p.Second.ProjectId
+                                    && p.First.TemplateId == p.Second.TemplateId
+                                    && p.First.SectionId == p.Second.SectionId
+                                    && p.First.CardId == p.Second.CardId
+                                    && p.First.DescriptionId == p.Second.DescriptionId
+                                    && string.Equals(p.First.AdditionalDescription?.TrimEnd(' '), p.Second.AdditionalDescription?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                    && p.First.CurrentCondition == p.Second.CurrentCondition
+                                    && p.First.ImageId == p.Second.ImageId
+                                    && (p.First.Src?.Length ?? 0) == (p.Second.Src?.Length ?? 0)
+                                    && ComputeSha256(p.First.Src) == ComputeSha256(p.Second.Src)
+                                    && ApproxDateEquals(p.First.CreatedDttm, p.Second.CreatedDttm)
+                                    && ApproxDateEquals(p.First.UpdateDttm, p.Second.UpdateDttm)
+                                    && p.First.IsDeleted == p.Second.IsDeleted);
+                            }
+                            if (sqlPic.Count > 0) methodPositiveRows["GetProjectImageCard"] += sqlPic.Count;
+                            checks.Add(new { method = "GetProjectImageCard", projectId = pid, templateId = tid, sectionId = sec, equal = picEq, sqlCount = sqlPic?.Count, cosmosCount = cosPic?.Count });
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { method = "GetProjectImageCard", projectId = pid, templateId = tid, sectionId = sec, equal = false, error = ex.Message });
+                        }
+
+                        // Query real GradingIds for this section from ProjectGradingMapping (T11, T3: no empty catch)
+                        List<int> gradingIds = new List<int>();
+                        try
+                        {
+                            gradingIds = (await conn.QueryAsync<int>(
+                                "SELECT DISTINCT GradingId FROM [dbo].[ProjectGradingMapping] WHERE ProjectId=@pid AND TemplateId=@tid AND SectionId=@sec AND GradingId IS NOT NULL AND IsDeleted=0",
+                                new { pid, tid, sec })).ToList();
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            allPassed = false;
+                            checks.Add(new { method = "Setup.GetGradingIds", projectId = pid, templateId = tid, sectionId = sec, equal = false, error = ex.Message });
+                        }
+
+                        var gradingsToTest = new List<int>(gradingIds.Take(2));
+                        gradingsToTest.Add(0); // Add 0 as missing
+
+                        foreach (var gid in gradingsToTest)
+                        {
+                            bool isMissingGid = gid == 0 || isMissingSec;
+
+                            // GetProjectGradingConditionMapping
+                            try
+                            {
+                                var sqlPgcm = await sqlRepo.GetProjectGradingConditionMapping(pid, tid, sec, gid);
+                                var cosPgcm = await cosmosRepo.GetProjectGradingConditionMapping(pid, tid, sec, gid);
+                                bool pgcmEq = isMissingGid
+                                    ? (sqlPgcm.Count == 0 && cosPgcm.Count == 0)
+                                    : (sqlPgcm.Count > 0 && sqlPgcm.Count == cosPgcm.Count);
+                                if (pgcmEq && !isMissingGid)
+                                {
+                                    var sOrder = sqlPgcm.OrderBy(x => x.Id).ToList();
+                                    var cOrder = cosPgcm.OrderBy(x => x.Id).ToList();
+                                    pgcmEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
+                                        && p.First.ProjectId == p.Second.ProjectId
+                                        && p.First.TemplateId == p.Second.TemplateId
+                                        && p.First.SectionId == p.Second.SectionId
+                                        && p.First.GradingId == p.Second.GradingId
+                                        && string.Equals(p.First.GradingConditionLabel?.TrimEnd(' '), p.Second.GradingConditionLabel?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                        && p.First.GradingConditionValue == p.Second.GradingConditionValue
+                                        && ApproxDateEquals(p.First.CreatedDttm, p.Second.CreatedDttm)
+                                        && ApproxDateEquals(p.First.UpdateDttm, p.Second.UpdateDttm)
+                                        && p.First.IsDeleted == p.Second.IsDeleted);
+                                }
+                                if (sqlPgcm.Count > 0) methodPositiveRows["GetProjectGradingConditionMapping"] += sqlPgcm.Count;
+                                checks.Add(new { method = "GetProjectGradingConditionMapping", projectId = pid, templateId = tid, sectionId = sec, gradingId = gid, equal = pgcmEq, sqlCount = sqlPgcm?.Count, cosmosCount = cosPgcm?.Count });
+                            }
+                            catch (Exception ex)
+                            {
+                                hadException = true;
+                                checks.Add(new { method = "GetProjectGradingConditionMapping", projectId = pid, templateId = tid, sectionId = sec, gradingId = gid, equal = false, error = ex.Message });
+                            }
+
+                            // GetProjectGradingById (T11)
+                            try
+                            {
+                                var sqlGbyId = await sqlRepo.GetProjectGradingById(pid, tid, sec, gid);
+                                var cosGbyId = await cosmosRepo.GetProjectGradingById(pid, tid, sec, gid);
+                                bool gbyIdEq = isMissingGid
+                                    ? (sqlGbyId == null && cosGbyId == null)
+                                    : (sqlGbyId != null && cosGbyId != null
+                                        && sqlGbyId.Id == cosGbyId.Id
+                                        && sqlGbyId.ProjectId == cosGbyId.ProjectId
+                                        && sqlGbyId.TemplateId == cosGbyId.TemplateId
+                                        && sqlGbyId.SectionId == cosGbyId.SectionId
+                                        && sqlGbyId.GradingId == cosGbyId.GradingId
+                                        && string.Equals(sqlGbyId.Value?.TrimEnd(' '), cosGbyId.Value?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                        && ApproxDateEquals(sqlGbyId.CreatedDttm, cosGbyId.CreatedDttm)
+                                        && ApproxDateEquals(sqlGbyId.UpdatedDttm, cosGbyId.UpdatedDttm)
+                                        && sqlGbyId.IsDeleted == cosGbyId.IsDeleted);
+                                if (sqlGbyId != null) methodPositiveRows["GetProjectGradingById"]++;
+                                checks.Add(new { method = "GetProjectGradingById", projectId = pid, templateId = tid, sectionId = sec, gradingId = gid, equal = gbyIdEq });
+                            }
+                            catch (Exception ex)
+                            {
+                                hadException = true;
+                                checks.Add(new { method = "GetProjectGradingById", projectId = pid, templateId = tid, sectionId = sec, gradingId = gid, equal = false, error = ex.Message });
+                            }
+                        }
+                    }
+                }
+
+                // Dedicated GetProjectImagCardById check across projects (T11)
+                try
+                {
+                    var cardRows = (await conn.QueryAsync<(int ProjectId, int TemplateId, Guid SectionId, int CardId)>(
+                        "SELECT DISTINCT TOP 5 ProjectId, TemplateId, SectionId, CardId FROM [dbo].[ProjectImageCards] WHERE ProjectId IS NOT NULL AND TemplateId IS NOT NULL AND SectionId IS NOT NULL AND CardId IS NOT NULL AND IsDeleted=0")).ToList();
+                    if (cardRows.Count == 0)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { method = "GetProjectImagCardById", equal = false, error = "No CardId found across projects in database" });
+                    }
+                    else
+                    {
+                        foreach (var cRow in cardRows)
+                        {
+                            var sqlCbyId = await sqlRepo.GetProjectImagCardById(cRow.ProjectId, cRow.TemplateId, cRow.SectionId, cRow.CardId);
+                            var cosCbyId = await cosmosRepo.GetProjectImagCardById(cRow.ProjectId, cRow.TemplateId, cRow.SectionId, cRow.CardId);
+                            bool cbyIdEq = sqlCbyId != null && cosCbyId != null
+                                && sqlCbyId.Id == cosCbyId.Id
+                                && sqlCbyId.ProjectId == cosCbyId.ProjectId
+                                && sqlCbyId.TemplateId == cosCbyId.TemplateId
+                                && sqlCbyId.SectionId == cosCbyId.SectionId
+                                && sqlCbyId.CardId == cosCbyId.CardId
+                                && sqlCbyId.DescriptionId == cosCbyId.DescriptionId
+                                && sqlCbyId.ImageId == cosCbyId.ImageId;
+                            if (sqlCbyId != null) methodPositiveRows["GetProjectImagCardById"]++;
+                            checks.Add(new { method = "GetProjectImagCardById", projectId = cRow.ProjectId, templateId = cRow.TemplateId, sectionId = cRow.SectionId, cardId = cRow.CardId, equal = cbyIdEq });
+                        }
+
+                        // Test missing CardId (-99999)
+                        var firstCard = cardRows[0];
+                        var sqlMissing = await sqlRepo.GetProjectImagCardById(firstCard.ProjectId, firstCard.TemplateId, firstCard.SectionId, -99999);
+                        var cosMissing = await cosmosRepo.GetProjectImagCardById(firstCard.ProjectId, firstCard.TemplateId, firstCard.SectionId, -99999);
+                        bool missingEq = sqlMissing == null && cosMissing == null;
+                        checks.Add(new { method = "GetProjectImagCardById", projectId = firstCard.ProjectId, cardId = -99999, equal = missingEq });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { method = "GetProjectImagCardById", equal = false, error = ex.Message });
+                }
+
+                // T1: Check every read method had at least one positive row in SQL
+                foreach (var kvp in methodPositiveRows)
+                {
+                    bool hasPositive = kvp.Value > 0;
+                    checks.Add(new { method = $"PositiveRowsCheck.{kvp.Key}", equal = hasPositive, rowCount = kvp.Value });
+                    if (!hasPositive) allPassed = false;
+                }
+
+                // =========================================================================
+                // 2. WRITE CHECKS (Cosmos only, writeTest=yes)
+                // =========================================================================
+                if (string.Equals(writeTest, "yes", StringComparison.OrdinalIgnoreCase))
+                {
+                    var cleanupList = new List<(Container Container, string Id, PartitionKey Pk)>();
+
+                    try
+                    {
+                        int testPid = -999;
+                        int testTid = -999;
+
+                        // T4: Empty-before-run check inside try
+                        var prePtm = await SafeQueryAsync<ProjectTemplateMappingDocument>(ptmContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        var prePic = await SafeQueryAsync<ProjectImageCardsDocument>(picContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998) OR c.CardId = 7771");
+                        var prePgm = await SafeQueryAsync<ProjectGradingMappingDocument>(pgmContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        var prePgcm = await SafeQueryAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        var preHi = await SafeQueryAsync<H_IReportTemplateDocument>(hiContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        var preTic = await SafeQueryAsync<TankImageCardDocument>(ticContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        var preGic = await SafeQueryAsync<GenericImageCardDocument>(gicContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        var preHipg = await SafeQueryAsync<HandIProjectGradingDocument>(hipgContainer, "SELECT * FROM c WHERE c.ProjectID IN (-999, -998)");
+                        var preHipgc = await SafeQueryAsync<HandIProjectGradingConditionsDocument>(hipgcContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        var preBu = await SafeQueryAsync<BulkUploadDocument>(buContainer, "SELECT * FROM c WHERE c.imageid = -99988");
+                        var preCl = await SafeQueryAsync<CapLogDocument>(clContainer, "SELECT * FROM c WHERE c.AbsProjectId = '-999'");
+                        var preId = await SafeQueryAsync<ImageDataDocument>(idContainer, "SELECT * FROM c WHERE c.ImageId IN (-99901, -99921)");
+                        var preImg = await SafeQueryAsync<ImagesDocument>(imgContainer, "SELECT * FROM c WHERE c.AssignmentId IN ('DupAssign', 'DelAssign') OR c.Id IN (-99911, -99912, -99921)");
+
+                        bool preCheckPassed = prePtm.Count == 0 && prePic.Count == 0 && prePgm.Count == 0 && prePgcm.Count == 0
+                            && preHi.Count == 0 && preTic.Count == 0 && preGic.Count == 0 && preHipg.Count == 0 && preHipgc.Count == 0
+                            && preBu.Count == 0 && preCl.Count == 0 && preId.Count == 0 && preImg.Count == 0;
+
+                        writeSteps.Add(new { step = "EmptyBeforeRunCheck.Trap4", passed = preCheckPassed,
+                            ptm = prePtm.Count, pic = prePic.Count, pgm = prePgm.Count, pgcm = prePgcm.Count,
+                            hi = preHi.Count, tic = preTic.Count, gic = preGic.Count, hipg = preHipg.Count, hipgc = preHipgc.Count,
+                            bu = preBu.Count, cl = preCl.Count, id = preId.Count, img = preImg.Count });
+                        if (!preCheckPassed) allPassed = false;
+
+                        // 2.1 CreateProjectTemplate -> false and nothing written (Trap 1, T6)
+                        var ptmCountBefore = (await SafeQueryAsync<ProjectTemplateMappingDocument>(ptmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        var ptmTest = new ProjectReportMapping
+                        {
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = Guid.NewGuid(),
+                            CreatedDttm = DateTime.UtcNow
+                        };
+                        var cptRes = await cosmosRepo.CreateProjectTemplate(ptmTest);
+                        var ptmCountAfter = (await SafeQueryAsync<ProjectTemplateMappingDocument>(ptmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        bool cptPassed = !cptRes && ptmCountBefore == ptmCountAfter && ptmCountAfter == 0;
+                        writeSteps.Add(new { step = "CreateProjectTemplate.Trap1", passed = cptPassed, returned = cptRes, ptmCountBefore, ptmCountAfter });
+
+                        // 2.2 CreateProjectImageCard: 0/""/1900 -> NULL, ProjectId 0 -> PartitionKey.Null, MinValue -> false
+                        // (a) MinValue (T6: count before = count after)
+                        var picCountBeforeMin = (await SafeQueryAsync<ProjectImageCardsDocument>(picContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        var picMinDate = new ProjectCardMapping
+                        {
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = Guid.NewGuid(),
+                            CreatedDttm = DateTime.MinValue,
+                            UpdateDttm = DateTime.UtcNow
+                        };
+                        var minDateRes = await cosmosRepo.CreateProjectImageCard(picMinDate);
+                        var picCountAfterMin = (await SafeQueryAsync<ProjectImageCardsDocument>(picContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        bool minDateOk = !minDateRes && picCountBeforeMin == picCountAfterMin;
+                        if (picCountAfterMin > picCountBeforeMin)
+                        {
+                            var leaked = await SafeQueryAsync<ProjectImageCardsDocument>(picContainer, "SELECT * FROM c WHERE c.ProjectId = -999");
+                            foreach (var d in leaked) cleanupList.Add((picContainer, d.id, new PartitionKey((double)testPid)));
+                        }
+
+                        // (b) 0 / "" / 1900-01-01
+                        var testSecGuid = Guid.NewGuid();
+                        var picNormal = new ProjectCardMapping
+                        {
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = testSecGuid,
+                            CardId = 0,
+                            DescriptionId = 0,
+                            AdditionalDescription = "",
+                            CurrentCondition = 0,
+                            ImageId = 0,
+                            CreatedDttm = new DateTime(1900, 1, 1),
+                            UpdateDttm = new DateTime(1900, 1, 1),
+                            IsDeleted = false
+                        };
+                        var picRes1 = await cosmosRepo.CreateProjectImageCard(picNormal);
+                        var readPics = await SafeQueryAsync<ProjectImageCardsDocument>(
+                            picContainer,
+                            "SELECT * FROM c WHERE c.ProjectId = -999 AND c.TemplateId = -999",
+                            new PartitionKey((double)-999));
+                        var picDoc1 = readPics.FirstOrDefault();
+                        if (picDoc1 != null) cleanupList.Add((picContainer, picDoc1.id, new PartitionKey((double)testPid)));
+
+                        bool picNormOk = picRes1 && picDoc1 != null
+                            && picDoc1.CardId == null
+                            && picDoc1.DescriptionId == null
+                            && picDoc1.AdditionalDescription == null
+                            && picDoc1.CurrentCondition == null
+                            && picDoc1.ImageId == null
+                            && picDoc1.CreatedDttm == null
+                            && picDoc1.UpdateDttm == null;
+
+                        // (c) ProjectId 0 -> PartitionKey.Null (T7: point read via PartitionKey.Null, verify TemplateId 0 -> NULL, SectionId, IsDeleted)
+                        var testSecGuid0 = Guid.NewGuid();
+                        var pic0 = new ProjectCardMapping
+                        {
+                            ProjectId = 0,
+                            TemplateId = 0,
+                            SectionId = testSecGuid0,
+                            CardId = 7771,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdateDttm = DateTime.UtcNow,
+                            IsDeleted = false
+                        };
+                        var pic0Res = await cosmosRepo.CreateProjectImageCard(pic0);
+                        var readPic0 = await SafeQueryAsync<ProjectImageCardsDocument>(
+                            picContainer,
+                            "SELECT * FROM c WHERE c.CardId = 7771");
+                        var picDoc0 = readPic0.FirstOrDefault();
+                        ProjectImageCardsDocument? pic0PointRead = null;
+                        if (picDoc0 != null)
+                        {
+                            cleanupList.Add((picContainer, picDoc0.id, PartitionKey.Null));
+                            pic0PointRead = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc0.id, PartitionKey.Null);
+                        }
+                        bool pic0Ok = pic0Res && pic0PointRead != null
+                            && pic0PointRead.ProjectId == null
+                            && pic0PointRead.TemplateId == null
+                            && string.Equals(pic0PointRead.SectionId, testSecGuid0.ToString().ToLowerInvariant(), StringComparison.OrdinalIgnoreCase)
+                            && pic0PointRead.IsDeleted == false;
+
+                        // (d) UpdateProjectImageCard -> CardId/UpdateDttm (T7), CreatedDttm NULL; new ProjectId -> partition move
+                        bool picUpdateOk = false;
+                        if (picDoc1 != null)
+                        {
+                            var nowUtc = DateTime.UtcNow;
+                            var updateModel = new ProjectCardMapping
+                            {
+                                Id = picDoc1.Id,
+                                ProjectId = testPid,
+                                TemplateId = testTid,
+                                SectionId = testSecGuid,
+                                CardId = 55,
+                                AdditionalDescription = "UpdatedDesc",
+                                UpdateDttm = nowUtc,
+                                IsDeleted = false
+                            };
+                            var upRes = await cosmosRepo.UpdateProjectImageCard(updateModel);
+                            var readBackUp = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, new PartitionKey((double)testPid));
+                            bool upFieldOk = upRes && readBackUp != null
+                                && readBackUp.CardId == 55
+                                && ApproxDateEquals(readBackUp.UpdateDttm, nowUtc)
+                                && readBackUp.AdditionalDescription == "UpdatedDesc"
+                                && readBackUp.CreatedDttm == null;
+
+                            // Partition move to -998
+                            updateModel.ProjectId = -998;
+                            var moveRes = await cosmosRepo.UpdateProjectImageCard(updateModel);
+                            var oldRead = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, new PartitionKey((double)testPid));
+                            var newRead = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, new PartitionKey((double)-998));
+                            if (newRead != null) cleanupList.Add((picContainer, picDoc1.id, new PartitionKey((double)-998)));
+                            bool moveOk = moveRes && oldRead == null && newRead != null && newRead.ProjectId == -998;
+
+                            picUpdateOk = upFieldOk && moveOk;
+                        }
+
+                        bool allPicOk = minDateOk && picNormOk && pic0Ok && picUpdateOk;
+                        writeSteps.Add(new { step = "CreateAndUpdateProjectImageCard.Trap2_3_4_7", passed = allPicOk, minDateOk, picNormOk, pic0Ok, picUpdateOk });
+
+                        // 2.3 CreateProjectGrading + UpdateProjectGrading (read back: Value transformed, RequiredInReport NULL)
+                        var pgmSecGuid = Guid.NewGuid();
+                        var pgmModel = new ProjectGradingMapping
+                        {
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = pgmSecGuid,
+                            GradingId = 901,
+                            Value = "12345678901234567890",
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdateDttm = DateTime.UtcNow,
+                            IsDeleted = false
+                        };
+                        var cpgRes = await cosmosRepo.CreateProjectGrading(pgmModel);
+                        var readPgmDocs = await SafeQueryAsync<ProjectGradingMappingDocument>(
+                            pgmContainer,
+                            "SELECT * FROM c WHERE c.ProjectId = -999 AND c.TemplateId = -999",
+                            new PartitionKey((double)testPid));
+                        var pgmDoc = readPgmDocs.FirstOrDefault();
+                        if (pgmDoc != null) cleanupList.Add((pgmContainer, pgmDoc.id, new PartitionKey((double)testPid)));
+
+                        var pgmList = await cosmosRepo.GetProjectGrading(testPid, testTid, pgmSecGuid);
+                        var readPgmItem = pgmList?.FirstOrDefault();
+                        bool cpgOk = cpgRes && pgmDoc != null && pgmDoc.RequiredInReport == null
+                            && readPgmItem != null && readPgmItem.Value == "1234567890 123456789";
+
+                        // UpdateProjectGrading
+                        bool upgOk = false;
+                        if (pgmDoc != null)
+                        {
+                            var upgModel = new ProjectGradingMapping
+                            {
+                                Id = pgmDoc.Id,
+                                ProjectId = testPid,
+                                TemplateId = testTid,
+                                SectionId = pgmSecGuid,
+                                GradingId = 901,
+                                Value = "NewVal",
+                                UpdateDttm = DateTime.UtcNow,
+                                IsDeleted = false
+                            };
+                            var upgRes = await cosmosRepo.UpdateProjectGrading(upgModel);
+                            var readPgmDoc2 = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgmDoc.id, new PartitionKey((double)testPid));
+                            upgOk = upgRes && readPgmDoc2 != null && readPgmDoc2.Value == "NewVal" && readPgmDoc2.CreatedDttm == null && readPgmDoc2.RequiredInReport == null;
+                        }
+
+                        bool allPgmOk = cpgOk && upgOk;
+                        writeSteps.Add(new { step = "CreateAndUpdateProjectGrading.Trap2_6_25", passed = allPgmOk, cpgOk, upgOk });
+
+                        // 2.4 CreateProjectGradingConditionMapping + UpdateProjectGradingConditionMapping (T7: GradingConditionValue true/false)
+                        var pgcmSecGuid = Guid.NewGuid();
+                        var pgcmModel = new ProjectGradingConditionMapping
+                        {
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = pgcmSecGuid,
+                            GradingId = 901,
+                            GradingConditionLabel = "InitialLabel",
+                            GradingConditionValue = true,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdateDttm = DateTime.UtcNow,
+                            IsDeleted = false
+                        };
+                        var cpgcmRes = await cosmosRepo.CreateProjectGradingConditionMapping(pgcmModel);
+                        var readPgcmDocs = await SafeQueryAsync<ProjectGradingConditionMappingDocument>(
+                            pgcmContainer,
+                            "SELECT * FROM c WHERE c.ProjectId = -999 AND c.TemplateId = -999",
+                            new PartitionKey((double)testPid));
+                        var pgcmDoc = readPgcmDocs.FirstOrDefault();
+                        if (pgcmDoc != null) cleanupList.Add((pgcmContainer, pgcmDoc.id, new PartitionKey((double)testPid)));
+
+                        bool cpgcmOk = cpgcmRes && pgcmDoc != null && pgcmDoc.GradingConditionLabel == "InitialLabel" && pgcmDoc.GradingConditionValue == true;
+
+                        bool upgcmOk = false;
+                        if (pgcmDoc != null)
+                        {
+                            var upgcmModel = new ProjectGradingConditionMapping
+                            {
+                                Id = pgcmDoc.Id,
+                                ProjectId = testPid,
+                                TemplateId = testTid,
+                                SectionId = pgcmSecGuid,
+                                GradingId = 901,
+                                GradingConditionLabel = "UpdatedLabel",
+                                GradingConditionValue = false,
+                                UpdateDttm = DateTime.UtcNow,
+                                IsDeleted = false
+                            };
+                            var upgcmRes = await cosmosRepo.UpdateProjectGradingConditionMapping(upgcmModel);
+                            var readPgcmDoc2 = await SafeReadAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, pgcmDoc.id, new PartitionKey((double)testPid));
+                            upgcmOk = upgcmRes && readPgcmDoc2 != null && readPgcmDoc2.GradingConditionLabel == "UpdatedLabel" && readPgcmDoc2.GradingConditionValue == false && readPgcmDoc2.CreatedDttm == null;
+                        }
+
+                        bool allPgcmOk = cpgcmOk && upgcmOk;
+                        writeSteps.Add(new { step = "CreateAndUpdateProjectGradingConditionMapping.Trap2_7", passed = allPgcmOk, cpgcmOk, upgcmOk });
+
+                        // 2.5 UpdateProjectTemplate on a directly created test document
+                        var testPtmId = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var testPtmDoc = new ProjectTemplateMappingDocument
+                        {
+                            id = testPtmId,
+                            Id = testPtmId,
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = Guid.NewGuid().ToString().ToLowerInvariant(),
+                            Notes = "InitialNotes",
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdatedDttm = DateTime.UtcNow,
+                            IsDeleted = false
+                        };
+                        await ptmContainer.CreateItemAsync(testPtmDoc, new PartitionKey((double)testPid));
+                        cleanupList.Add((ptmContainer, testPtmId, new PartitionKey((double)testPid)));
+
+                        var uptModel = new ProjectReportMapping
+                        {
+                            Id = Guid.Parse(testPtmId),
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = Guid.Parse(testPtmDoc.SectionId!),
+                            Notes = "UpdatedNotes",
+                            UpdateDttm = DateTime.UtcNow,
+                            IsDeleted = false
+                        };
+                        var uptRes = await cosmosRepo.UpdateProjectTemplate(uptModel);
+                        var readPtmBack = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, testPtmId, new PartitionKey((double)testPid));
+                        bool uptOk = uptRes && readPtmBack != null && readPtmBack.Notes == "UpdatedNotes" && readPtmBack.CreatedDttm == null;
+                        writeSteps.Add(new { step = "UpdateProjectTemplate.Trap2", passed = uptOk, uptRes, createdDttmNull = (readPtmBack?.CreatedDttm == null) });
+
+                        // 2.6 CreateHIReport + UpdateHIReport (T6, T7: read back fully, duplicate blocked, IsActive=false unchanged, OthersDescription seeded then NULL)
+                        var testHiGuid = Guid.NewGuid();
+                        var testHiIdStr = testHiGuid.ToString().ToLowerInvariant();
+                        var hiModel = new HandIReport
+                        {
+                            Id = testHiGuid,
+                            ProjectId = testPid,
+                            CompanyName = "InitialCompany",
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdatedDttm = DateTime.UtcNow
+                        };
+                        var chiRes = await cosmosRepo.CreateHIReport(hiModel);
+                        cleanupList.Add((hiContainer, testHiIdStr, new PartitionKey((double)testPid)));
+
+                        // Read back fully per T7
+                        var createdHiDoc = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, testHiIdStr, new PartitionKey((double)testPid));
+                        bool chiReadBackOk = createdHiDoc != null
+                            && createdHiDoc.Id == testHiIdStr
+                            && createdHiDoc.ProjectId == testPid
+                            && createdHiDoc.CompanyName == "InitialCompany"
+                            && createdHiDoc.IsActive == true
+                            && createdHiDoc.IsDeleted == false;
+
+                        // Duplicate Id in project -998 -> false (Trap 20, T6: count before = count after = 0)
+                        var hi998Before = (await SafeQueryAsync<H_IReportTemplateDocument>(hiContainer, "SELECT * FROM c WHERE c.ProjectId = -998")).Count;
+                        var hiDupModel = new HandIReport
+                        {
+                            Id = testHiGuid,
+                            ProjectId = -998,
+                            CompanyName = "DupCompany",
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdatedDttm = DateTime.UtcNow
+                        };
+                        var chiDupRes = await cosmosRepo.CreateHIReport(hiDupModel);
+                        var hi998After = (await SafeQueryAsync<H_IReportTemplateDocument>(hiContainer, "SELECT * FROM c WHERE c.ProjectId = -998")).Count;
+                        var checkDupHi = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, testHiIdStr, new PartitionKey((double)-998));
+                        if (checkDupHi != null) cleanupList.Add((hiContainer, testHiIdStr, new PartitionKey((double)-998)));
+                        bool dupBlockedOk = !chiDupRes && hi998Before == hi998After && checkDupHi == null;
+
+                        // Update with IsActive=false -> false (Trap 19, T6: doc unchanged, same _etag)
+                        var hiBeforeInactiveResp = await hiContainer.ReadItemAsync<H_IReportTemplateDocument>(testHiIdStr, new PartitionKey((double)testPid));
+                        var hiBeforeInactive = hiBeforeInactiveResp.Resource;
+                        hiModel.IsActive = false;
+                        var uhiInactiveRes = await cosmosRepo.UpdateHIReport(hiModel);
+                        var hiAfterInactiveResp = await hiContainer.ReadItemAsync<H_IReportTemplateDocument>(testHiIdStr, new PartitionKey((double)testPid));
+                        var hiAfterInactive = hiAfterInactiveResp.Resource;
+                        bool inactiveBlockedOk = !uhiInactiveRes && hiBeforeInactive != null && hiAfterInactive != null
+                            && hiBeforeInactiveResp.ETag == hiAfterInactiveResp.ETag;
+
+                        // Seed OthersDescription non-null before update per T7, then update -> OthersDescription and CreatedDttm NULL
+                        if (hiAfterInactive != null)
+                        {
+                            hiAfterInactive.OthersDescription = "seeded_not_null";
+                            await hiContainer.ReplaceItemAsync(hiAfterInactive, hiAfterInactive.id, new PartitionKey((double)testPid));
+                        }
+
+                        hiModel.IsActive = true;
+                        hiModel.CompanyName = "UpdatedCompany";
+                        hiModel.UpdatedDttm = DateTime.UtcNow;
+                        var uhiRes = await cosmosRepo.UpdateHIReport(hiModel);
+                        var readHiBack = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, testHiIdStr, new PartitionKey((double)testPid));
+                        bool uhiOk = uhiRes && readHiBack != null
+                            && readHiBack.CompanyName == "UpdatedCompany"
+                            && readHiBack.CreatedDttm == null
+                            && readHiBack.OthersDescription == null;
+
+                        bool allHiOk = chiRes && chiReadBackOk && dupBlockedOk && inactiveBlockedOk && uhiOk;
+                        writeSteps.Add(new { step = "CreateAndUpdateHIReport.Trap2_19_20_T6_T7", passed = allHiOk, chiRes, chiReadBackOk, dupBlockedOk, inactiveBlockedOk, uhiOk });
+
+                        // 2.7 DeleteProjectTemplate(-999, -999) on ALL 9 containers + second template untouched (T5)
+                        var dateSeedCreated = new DateTime(2026, 11, 1, 10, 0, 0, DateTimeKind.Utc);
+                        var dateSeedUpdated = new DateTime(2026, 11, 2, 12, 0, 0, DateTimeKind.Utc);
+
+                        // Seed second template -998 for project -999 in 6 containers: PTM, PIC, PGM, PGCM (T5), TIC, GIC
+                        var ptm998Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var ptm998 = new ProjectTemplateMappingDocument { id = ptm998Id, Id = ptm998Id, ProjectId = testPid, TemplateId = -998, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await ptmContainer.CreateItemAsync(ptm998, new PartitionKey((double)testPid));
+                        cleanupList.Add((ptmContainer, ptm998Id, new PartitionKey((double)testPid)));
+
+                        var pic998Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pic998 = new ProjectImageCardsDocument { id = pic998Id, Id = -9981, ProjectId = testPid, TemplateId = -998, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdateDttm = dateSeedUpdated };
+                        await picContainer.CreateItemAsync(pic998, new PartitionKey((double)testPid));
+                        cleanupList.Add((picContainer, pic998Id, new PartitionKey((double)testPid)));
+
+                        var pgm998Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pgm998 = new ProjectGradingMappingDocument { id = pgm998Id, Id = -9982, ProjectId = testPid, TemplateId = -998, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await pgmContainer.CreateItemAsync(pgm998, new PartitionKey((double)testPid));
+                        cleanupList.Add((pgmContainer, pgm998Id, new PartitionKey((double)testPid)));
+
+                        var pgcm998Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pgcm998 = new ProjectGradingConditionMappingDocument { id = pgcm998Id, Id = -9989, ProjectId = testPid, TemplateId = -998, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await pgcmContainer.CreateItemAsync(pgcm998, new PartitionKey((double)testPid));
+                        cleanupList.Add((pgcmContainer, pgcm998Id, new PartitionKey((double)testPid)));
+
+                        var tic998Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var tic998 = new TankImageCardDocument { id = tic998Id, Id = -9983, ProjectId = testPid, TemplateId = -998, IsActive = true, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await ticContainer.CreateItemAsync(tic998, new PartitionKey((double)testPid));
+                        cleanupList.Add((ticContainer, tic998Id, new PartitionKey((double)testPid)));
+
+                        var gic998Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var gic998 = new GenericImageCardDocument { id = gic998Id, Id = -9984, ProjectId = testPid, TemplateId = -998, IsActive = true, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await gicContainer.CreateItemAsync(gic998, new PartitionKey((double)testPid));
+                        cleanupList.Add((gicContainer, gic998Id, new PartitionKey((double)testPid)));
+
+                        // Seed documents for template -999 for ALL 9 containers (T5: seed fresh PIC, PGM, PGCM for this test)
+                        var pic999Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pic999 = new ProjectImageCardsDocument { id = pic999Id, Id = -9991, ProjectId = testPid, TemplateId = testTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdateDttm = dateSeedUpdated };
+                        await picContainer.CreateItemAsync(pic999, new PartitionKey((double)testPid));
+                        cleanupList.Add((picContainer, pic999Id, new PartitionKey((double)testPid)));
+
+                        var pgm999Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pgm999 = new ProjectGradingMappingDocument { id = pgm999Id, Id = -9992, ProjectId = testPid, TemplateId = testTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await pgmContainer.CreateItemAsync(pgm999, new PartitionKey((double)testPid));
+                        cleanupList.Add((pgmContainer, pgm999Id, new PartitionKey((double)testPid)));
+
+                        var pgcm999Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pgcm999 = new ProjectGradingConditionMappingDocument { id = pgcm999Id, Id = -9998, ProjectId = testPid, TemplateId = testTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await pgcmContainer.CreateItemAsync(pgcm999, new PartitionKey((double)testPid));
+                        cleanupList.Add((pgcmContainer, pgcm999Id, new PartitionKey((double)testPid)));
+
+                        var tic999Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var tic999 = new TankImageCardDocument { id = tic999Id, Id = -9993, ProjectId = testPid, TemplateId = testTid, IsActive = true, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await ticContainer.CreateItemAsync(tic999, new PartitionKey((double)testPid));
+                        cleanupList.Add((ticContainer, tic999Id, new PartitionKey((double)testPid)));
+
+                        var gic999Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var gic999 = new GenericImageCardDocument { id = gic999Id, Id = -9994, ProjectId = testPid, TemplateId = testTid, IsActive = true, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await gicContainer.CreateItemAsync(gic999, new PartitionKey((double)testPid));
+                        cleanupList.Add((gicContainer, gic999Id, new PartitionKey((double)testPid)));
+
+                        var hipgId = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var hipg = new HandIProjectGradingDocument { id = hipgId, Id = -9995, ProjectID = testPid, IsActive = true, IsDeleted = false, CreatedOn = dateSeedCreated, ModifiedOn = dateSeedUpdated };
+                        await hipgContainer.CreateItemAsync(hipg, new PartitionKey((double)testPid));
+                        cleanupList.Add((hipgContainer, hipgId, new PartitionKey((double)testPid)));
+
+                        var hipgcId = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var hipgc = new HandIProjectGradingConditionsDocument { id = hipgcId, Id = -9996, ProjectId = testPid, IsActive = true, IsDeleted = false, CreatedOn = dateSeedCreated, ModifiedOn = dateSeedUpdated };
+                        await hipgcContainer.CreateItemAsync(hipgc, new PartitionKey((double)testPid));
+                        cleanupList.Add((hipgcContainer, hipgcId, new PartitionKey((double)testPid)));
+
+                        // Call DeleteProjectTemplate(-999, -999)
+                        var dptRes = await cosmosRepo.DeleteProjectTemplate(testPid, testTid);
+
+                        // Read back ALL 9 containers for -999: verify soft-deleted / deactivated, and NO date column changed (T5)
+                        var rPtm = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, testPtmId, new PartitionKey((double)testPid));
+                        var rPic = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, pic999Id, new PartitionKey((double)testPid));
+                        var rPgm = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgm999Id, new PartitionKey((double)testPid));
+                        var rPgcm = await SafeReadAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, pgcm999Id, new PartitionKey((double)testPid));
+                        var rHi = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, testHiIdStr, new PartitionKey((double)testPid));
+                        var rTic = await SafeReadAsync<TankImageCardDocument>(ticContainer, tic999Id, new PartitionKey((double)testPid));
+                        var rGic = await SafeReadAsync<GenericImageCardDocument>(gicContainer, gic999Id, new PartitionKey((double)testPid));
+                        var rHipg = await SafeReadAsync<HandIProjectGradingDocument>(hipgContainer, hipgId, new PartitionKey((double)testPid));
+                        var rHipgc = await SafeReadAsync<HandIProjectGradingConditionsDocument>(hipgcContainer, hipgcId, new PartitionKey((double)testPid));
+
+                        bool flagged999 = rPtm?.IsDeleted == true
+                            && rPic?.IsDeleted == true
+                            && rPgm?.IsDeleted == true
+                            && rPgcm?.IsDeleted == true
+                            && rHi?.IsDeleted == true
+                            && rTic?.IsActive == false
+                            && rGic?.IsActive == false && rGic?.IsDeleted == true
+                            && rHipg?.IsActive == false && rHipg?.IsDeleted == true
+                            && rHipgc?.IsActive == false && rHipgc?.IsDeleted == true;
+
+                        bool datesUnchanged999 = rPic?.CreatedDttm == dateSeedCreated && rPic?.UpdateDttm == dateSeedUpdated
+                            && rPgm?.CreatedDttm == dateSeedCreated && rPgm?.UpdatedDttm == dateSeedUpdated
+                            && rPgcm?.CreatedDttm == dateSeedCreated && rPgcm?.UpdatedDttm == dateSeedUpdated
+                            && rTic?.CreatedDttm == dateSeedCreated && rTic?.UpdatedDttm == dateSeedUpdated
+                            && rGic?.CreatedDttm == dateSeedCreated && rGic?.UpdatedDttm == dateSeedUpdated
+                            && rHipg?.CreatedOn == dateSeedCreated && rHipg?.ModifiedOn == dateSeedUpdated
+                            && rHipgc?.CreatedOn == dateSeedCreated && rHipgc?.ModifiedOn == dateSeedUpdated;
+
+                        // Second template -998 untouched across all 6 containers (T5)
+                        var rPtm998 = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, ptm998Id, new PartitionKey((double)testPid));
+                        var rPic998 = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, pic998Id, new PartitionKey((double)testPid));
+                        var rPgm998 = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgm998Id, new PartitionKey((double)testPid));
+                        var rPgcm998 = await SafeReadAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, pgcm998Id, new PartitionKey((double)testPid));
+                        var rTic998 = await SafeReadAsync<TankImageCardDocument>(ticContainer, tic998Id, new PartitionKey((double)testPid));
+                        var rGic998 = await SafeReadAsync<GenericImageCardDocument>(gicContainer, gic998Id, new PartitionKey((double)testPid));
+
+                        bool untouched998 = rPtm998?.IsDeleted == false
+                            && rPic998?.IsDeleted == false
+                            && rPgm998?.IsDeleted == false
+                            && rPgcm998?.IsDeleted == false
+                            && rTic998?.IsActive == true
+                            && rGic998?.IsActive == true && rGic998?.IsDeleted == false;
+
+                        bool dptOk = dptRes && flagged999 && datesUnchanged999 && untouched998;
+                        writeSteps.Add(new { step = "DeleteProjectTemplate.All9Containers.Trap18_T5", passed = dptOk, dptRes, flagged999, datesUnchanged999, untouched998 });
+
+                        // 2.8 AddEditImageNew (Trap 14)
+                        int testImgId = -99901;
+                        var aeiRes1 = await cosmosRepo.AddEditImageNew(testImgId, "Base64_Original");
+                        var aeiDocs = await SafeQueryAsync<ImageDataDocument>(idContainer, $"SELECT * FROM c WHERE c.ImageId = {testImgId}");
+                        var aeiDoc = aeiDocs.FirstOrDefault();
+                        if (aeiDoc != null) cleanupList.Add((idContainer, aeiDoc.id, new PartitionKey(aeiDoc.id)));
+
+                        var aeiRes2 = await cosmosRepo.AddEditImageNew(testImgId, "Base64_Updated");
+                        var aeiDoc2 = aeiDoc != null ? await SafeReadAsync<ImageDataDocument>(idContainer, aeiDoc.id, new PartitionKey(aeiDoc.id)) : null;
+
+                        bool aeiOk = aeiRes1 && !aeiRes2 && aeiDoc2 != null && aeiDoc2.Base64String == "Base64_Updated";
+                        writeSteps.Add(new { step = "AddEditImageNew.Trap14", passed = aeiOk, aeiRes1, aeiRes2, updated = (aeiDoc2?.Base64String == "Base64_Updated") });
+
+                        // 2.9 UploadImage + Repeated FileId test (Traps 16/17)
+                        var uniqueFileId = $"parity-upload-{Guid.NewGuid()}";
+                        var upId1 = await cosmosRepo.UploadImage("Assign1", uniqueFileId);
+                        var upDocs = await SafeQueryAsync<ImagesDocument>(imgContainer, $"SELECT * FROM c WHERE c.Id = {upId1}");
+                        var upDoc = upDocs.FirstOrDefault();
+                        if (upDoc != null) cleanupList.Add((imgContainer, upDoc.id, new PartitionKey(upDoc.id)));
+
+                        var upId2 = await cosmosRepo.UploadImage("Assign2", uniqueFileId);
+                        var upDoc2 = upDoc != null ? await SafeReadAsync<ImagesDocument>(imgContainer, upDoc.id, new PartitionKey(upDoc.id)) : null;
+
+                        bool upSingleOk = upId1 > 0 && upId2 == upId1 && upDoc2 != null && upDoc2.AssignmentId == "Assign2";
+
+                        // Repeated FileId test: 2 docs with same FileId -> throws
+                        var dupFileId = $"parity-dup-{Guid.NewGuid()}";
+                        var dupDoc1 = new ImagesDocument { id = Guid.NewGuid().ToString(), Id = -99911, AssignmentId = "DupAssign", FileId = dupFileId, InsertDate = DateTime.UtcNow };
+                        var dupDoc2 = new ImagesDocument { id = Guid.NewGuid().ToString(), Id = -99912, AssignmentId = "DupAssign", FileId = dupFileId, InsertDate = DateTime.UtcNow };
+                        await imgContainer.CreateItemAsync(dupDoc1, new PartitionKey(dupDoc1.id));
+                        await imgContainer.CreateItemAsync(dupDoc2, new PartitionKey(dupDoc2.id));
+                        cleanupList.Add((imgContainer, dupDoc1.id, new PartitionKey(dupDoc1.id)));
+                        cleanupList.Add((imgContainer, dupDoc2.id, new PartitionKey(dupDoc2.id)));
+
+                        bool uploadThrew = false;
+                        try { await cosmosRepo.UploadImage("DupAssign", dupFileId); } catch (InvalidOperationException) { uploadThrew = true; }
+
+                        bool deleteThrew = false;
+                        try { await cosmosRepo.DeleteImage("DupAssign", dupFileId); } catch (InvalidOperationException) { deleteThrew = true; }
+
+                        bool allUploadOk = upSingleOk && uploadThrew && deleteThrew;
+                        writeSteps.Add(new { step = "UploadImageAndRepeatedFileId.Trap16_17", passed = allUploadOk, upSingleOk, uploadThrew, deleteThrew });
+
+                        // 2.10 DeleteImage
+                        var delFileId = $"parity-del-{Guid.NewGuid()}";
+                        var delImgDoc = new ImagesDocument { id = Guid.NewGuid().ToString(), Id = -99921, AssignmentId = "DelAssign", FileId = delFileId, InsertDate = DateTime.UtcNow };
+                        await imgContainer.CreateItemAsync(delImgDoc, new PartitionKey(delImgDoc.id));
+                        cleanupList.Add((imgContainer, delImgDoc.id, new PartitionKey(delImgDoc.id)));
+
+                        var delDataDoc = new ImageDataDocument { id = Guid.NewGuid().ToString(), Id = -99922, ImageId = -99921, Base64String = "DelData", CreateDttm = DateTime.UtcNow };
+                        await idContainer.CreateItemAsync(delDataDoc, new PartitionKey(delDataDoc.id));
+                        cleanupList.Add((idContainer, delDataDoc.id, new PartitionKey(delDataDoc.id)));
+
+                        var delRes1 = await cosmosRepo.DeleteImage("DelAssign", delFileId);
+                        var checkImg = await SafeReadAsync<ImagesDocument>(imgContainer, delImgDoc.id, new PartitionKey(delImgDoc.id));
+                        var checkData = await SafeReadAsync<ImageDataDocument>(idContainer, delDataDoc.id, new PartitionKey(delDataDoc.id));
+
+                        var delRes2 = await cosmosRepo.DeleteImage("DelAssign", delFileId);
+
+                        bool delImgOk = delRes1 && checkImg == null && checkData == null && !delRes2;
+                        writeSteps.Add(new { step = "DeleteImage.Trap16", passed = delImgOk, delRes1, delRes2, checkImgNull = (checkImg == null), checkDataNull = (checkData == null) });
+
+                        // 2.11 DeleteCard on test CapLog (returns false, doc gone; "abc" throws FormatException) (Trap 15)
+                        var capLogDoc = new CapLogDocument
+                        {
+                            id = Guid.NewGuid().ToString(),
+                            Id = -99931,
+                            AbsProjectId = "-999",
+                            AppId = "TestApp",
+                            AssignmentId = "TestAssign",
+                            SequenceId = "TestSeq",
+                            CardId = 12345,
+                            IntegrationId = "TestInt"
+                        };
+                        await clContainer.CreateItemAsync(capLogDoc, new PartitionKey(capLogDoc.id));
+                        cleanupList.Add((clContainer, capLogDoc.id, new PartitionKey(capLogDoc.id)));
+
+                        var delCardRes = await cosmosRepo.DeleteCard(-999, "12345", "TestSeq", "TestAssign", "TestApp");
+                        var checkCapLog = await SafeReadAsync<CapLogDocument>(clContainer, capLogDoc.id, new PartitionKey(capLogDoc.id));
+
+                        bool delCardThrew = false;
+                        try { await cosmosRepo.DeleteCard(-999, "abc", "TestSeq", "TestAssign", "TestApp"); } catch (FormatException) { delCardThrew = true; }
+
+                        bool delCardOk = !delCardRes && checkCapLog == null && delCardThrew;
+                        writeSteps.Add(new { step = "DeleteCard.Trap15", passed = delCardOk, delCardRes, checkCapLogNull = (checkCapLog == null), delCardThrew });
+
+                        // 2.12 DeleteBulkUploadImage (-1 and doc gone) (Trap 13)
+                        var buDoc = new BulkUploadDocument
+                        {
+                            id = Guid.NewGuid().ToString(),
+                            Id = -99941,
+                            imageid = -99988
+                        };
+                        await buContainer.CreateItemAsync(buDoc, new PartitionKey(buDoc.id));
+                        cleanupList.Add((buContainer, buDoc.id, new PartitionKey(buDoc.id)));
+
+                        var delBuRes = await cosmosRepo.DeleteBulkUploadImage(-99988);
+                        var checkBu = await SafeReadAsync<BulkUploadDocument>(buContainer, buDoc.id, new PartitionKey(buDoc.id));
+
+                        bool delBuOk = delBuRes == -1 && checkBu == null;
+                        writeSteps.Add(new { step = "DeleteBulkUploadImage.Trap13", passed = delBuOk, delBuRes, checkBuNull = (checkBu == null) });
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        writeSteps.Add(new { step = "WriteTest.Exception", passed = false, error = ex.Message });
+                    }
+                    finally
+                    {
+                        foreach (var (cnt, id, pk) in cleanupList)
+                        {
+                            try
+                            {
+                                await cnt.DeleteItemAsync<object>(id, pk);
+                            }
+                            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                            {
+                            }
+                            catch (Exception ex)
+                            {
+                                hadException = true;
+                                allPassed = false;
+                                writeSteps.Add(new { step = "Cleanup.Error", id, passed = false, error = ex.Message });
+                            }
+                        }
+                    }
+                }
+
+                allPassed = allPassed && !hadException
+                    && checks.All(c =>
+                    {
+                        var prop = c.GetType().GetProperty("equal") ?? c.GetType().GetProperty("match") ?? c.GetType().GetProperty("allMatch");
+                        if (prop != null)
+                        {
+                            var val = prop.GetValue(c);
+                            if (val is bool b) return b;
+                        }
+                        var errProp = c.GetType().GetProperty("error");
+                        if (errProp != null) return false;
+                        return true;
+                    })
+                    && writeSteps.All(w =>
+                    {
+                        var prop = w.GetType().GetProperty("passed");
+                        if (prop != null)
+                        {
+                            var val = prop.GetValue(w);
+                            if (val is bool b) return b;
+                        }
+                        return false;
+                    });
+
+                return Results.Ok(new
+                {
+                    batch = 9,
+                    allPassed,
+                    checksCount = checks.Count,
+                    checks,
+                    writeSteps
+                });
+            }).AllowAnonymous();
+        }
+
+        private static async Task<List<TDoc>> SafeQueryAsync<TDoc>(Container container, string queryText, PartitionKey? pk = null)
+        {
+            var results = new List<TDoc>();
+            var q = new QueryDefinition(queryText);
+            var options = pk.HasValue ? new QueryRequestOptions { PartitionKey = pk.Value } : null;
+            using var feed = container.GetItemQueryIterator<TDoc>(q, requestOptions: options);
+            while (feed.HasMoreResults)
+            {
+                var resp = await feed.ReadNextAsync();
+                results.AddRange(resp);
+            }
+            return results;
+        }
+
+        private static async Task<TDoc?> SafeReadAsync<TDoc>(Container container, string id, PartitionKey pk)
+        {
+            try
+            {
+                var resp = await container.ReadItemAsync<TDoc>(id, pk);
+                return resp.Resource;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return default;
+            }
+        }
+
+        private static string ComputeSha256(string? input)
+        {
+            if (input == null) return string.Empty;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(input);
+            var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+            return Convert.ToHexString(hash);
         }
     }
 }
