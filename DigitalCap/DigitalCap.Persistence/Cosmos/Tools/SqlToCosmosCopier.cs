@@ -107,36 +107,47 @@ namespace DigitalCap.Persistence.Cosmos.Tools
             var idSource = "PK";
             if (!string.IsNullOrWhiteSpace(idColumn))
             {
-                var hasNamedCol = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
-                    @"SELECT COUNT(1) FROM INFORMATION_SCHEMA.COLUMNS 
-                      WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table AND COLUMN_NAME = @idColumn",
-                    new { schema = tableInfo.Schema, table = tableInfo.Table, idColumn },
-                    cancellationToken: ct
-                )) > 0;
-
-                if (!hasNamedCol)
+                var requestedCols = idColumn.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                if (requestedCols.Count == 0)
                 {
-                    throw new ArgumentException($"Column '{idColumn}' was not found in table [{tableInfo.Schema}].[{tableInfo.Table}].");
+                    throw new ArgumentException("idColumn parameter was empty or contained only separators.");
                 }
 
-                var safeCol = idColumn.Replace("]", "]]");
+                foreach (var col in requestedCols)
+                {
+                    var hasNamedCol = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                        @"SELECT COUNT(1) FROM INFORMATION_SCHEMA.COLUMNS 
+                          WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table AND COLUMN_NAME = @col",
+                        new { schema = tableInfo.Schema, table = tableInfo.Table, col },
+                        cancellationToken: ct
+                    )) > 0;
+
+                    if (!hasNamedCol)
+                    {
+                        throw new ArgumentException($"Column '{col}' was not found in table [{tableInfo.Schema}].[{tableInfo.Table}].");
+                    }
+                }
+
+                var nullConditions = string.Join(" OR ", requestedCols.Select(c => $"[{c.Replace("]", "]]")}] IS NULL"));
+                var colListSql = string.Join(", ", requestedCols.Select(c => $"[{c.Replace("]", "]]")}]"));
+
                 var idStats = await connection.QueryFirstOrDefaultAsync<(int TotalRows, int NullIds, int DuplicateIds)>(new CommandDefinition(
                     $@"SELECT 
                          COUNT(1) AS TotalRows,
-                         COUNT(CASE WHEN [{safeCol}] IS NULL THEN 1 END) AS NullIds,
-                         COUNT(1) - COUNT(DISTINCT [{safeCol}]) AS DuplicateIds
+                         COUNT(CASE WHEN {nullConditions} THEN 1 END) AS NullIds,
+                         COUNT(1) - (SELECT COUNT(1) FROM (SELECT DISTINCT {colListSql} FROM [{tableInfo.Schema.Replace("]", "]]")}].[{tableInfo.Table.Replace("]", "]]")}]) AS _d) AS DuplicateIds
                        FROM [{tableInfo.Schema.Replace("]", "]]")}].[{tableInfo.Table.Replace("]", "]]")}]",
                     cancellationToken: ct
                 ));
 
                 if (idStats.NullIds == 0 && idStats.DuplicateIds == 0)
                 {
-                    pkColumns = new List<string> { idColumn };
-                    idSource = $"{idColumn} column (no PK)";
+                    pkColumns = requestedCols;
+                    idSource = $"{string.Join(",", requestedCols)} column(s) (no PK)";
                 }
                 else
                 {
-                    throw new InvalidOperationException($"Table [{tableInfo.Schema}].[{tableInfo.Table}] column '{idColumn}' has {idStats.NullIds} nulls and {idStats.DuplicateIds} duplicates across {idStats.TotalRows} rows.");
+                    throw new InvalidOperationException($"Table [{tableInfo.Schema}].[{tableInfo.Table}] column(s) '{string.Join(",", requestedCols)}' has {idStats.NullIds} nulls and {idStats.DuplicateIds} duplicates across {idStats.TotalRows} rows.");
                 }
             }
             else if (pkColumns.Count == 0)

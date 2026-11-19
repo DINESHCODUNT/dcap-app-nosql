@@ -110,6 +110,16 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<CosmosCapRepository>();
             services.AddScoped<CosmosVesselRepository>();
             services.AddScoped<CosmosProjectRepository>();
+            services.AddScoped<CosmosTemplateRepository>();
+            services.AddScoped<CosmosProjectReportRepository>();
+            services.AddScoped<CosmosExportRepository>();
+            services.AddScoped<CosmosDescriptionRepository>();
+            services.AddScoped<GradingRepository>();
+            services.AddScoped<TankRepository>();
+            services.AddScoped<CosmosGradingRepository>();
+            services.AddScoped<CosmosTankRepository>();
+            services.AddScoped<ReportPartRepository>();
+            services.AddScoped<CosmosReportPartRepository>();
 
             if (string.Equals(dataProviderDefault, "Cosmos", StringComparison.OrdinalIgnoreCase))
             {
@@ -129,6 +139,13 @@ namespace DigitalCap.Persistence.Extensions
                 services.AddScoped<ICapRepository, CosmosCapRepository>();
                 services.AddScoped<IVesselRepository, CosmosVesselRepository>();
                 services.AddScoped<IProjectRepository, CosmosProjectRepository>();
+                services.AddScoped<ITemplateRepository, CosmosTemplateRepository>();
+                services.AddScoped<IProjectReportRepository, CosmosProjectReportRepository>();
+                services.AddScoped<IExportRepository, CosmosExportRepository>();
+                services.AddScoped<IDescriptionRepository, CosmosDescriptionRepository>();
+                services.AddScoped<IGradingRepository, CosmosGradingRepository>();
+                services.AddScoped<ITankRepository, CosmosTankRepository>();
+                services.AddScoped<IReportPartRepository, CosmosReportPartRepository>();
             }
             services.AddHttpClient(); // Add this
             services.AddScoped<IHttpService, HttpService>();

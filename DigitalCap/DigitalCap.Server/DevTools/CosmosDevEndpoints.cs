@@ -3,9 +3,18 @@ using DigitalCap.Core.DTO;
 using DigitalCap.Core.Enumerations;
 using DigitalCap.Core.Interfaces.Repository;
 using DigitalCap.Core.Models;
+using DigitalCap.Core.Models.ExportConfig;
+using DigitalCap.Core.Models.Grading;
+using DigitalCap.Core.Models.ImageDescription;
 using DigitalCap.Core.Models.Permissions;
+using DigitalCap.Core.Models.ReportConfig;
 using DigitalCap.Core.Models.Survey;
+using DigitalCap.Core.Models.Tank;
+using DigitalCap.Core.Models.View.Admin;
+using DigitalCap.Core.Models.VesselModel;
 using DigitalCap.Core.Security;
+using ShipType = DigitalCap.Core.Enumerations.ShipType;
+using Grading = DigitalCap.Core.Models.Grading.Grading;
 using DigitalCap.Infrastructure.DbContext;
 using DigitalCap.Persistence.Cosmos.Documents;
 using DigitalCap.Persistence.Cosmos.Infrastructure;
@@ -157,6 +166,9 @@ namespace DigitalCap.Server.DevTools
             MapParityBatch3(app);
             MapParityBatch4(app);
             MapParityBatch5(app);
+            MapParityBatch6(app);
+            MapParityBatch7(app);
+            MapParityBatch8(app);
             MapDevCopyTable(app);
             return app;
         }
@@ -2323,6 +2335,7 @@ namespace DigitalCap.Server.DevTools
                 var checks = new List<object>();
                 var writeSteps = new List<object>();
                 bool hadException = false;
+                bool allPassed = true;
 
                 // 1. CapRepository parity
                 try
@@ -2861,6 +2874,4753 @@ namespace DigitalCap.Server.DevTools
                 {
                     return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
                 }
+            }).AllowAnonymous();
+        }
+
+        private static void MapParityBatch6(WebApplication app)
+        {
+            app.MapGet("/health/parity/batch6", async (
+                string? writeTest,
+                IServiceProvider sp,
+                IConfiguration config,
+                CancellationToken ct) =>
+            {
+                var sqlTemplateRepo = sp.GetRequiredService<TemplateRepository>();
+                var cosmosTemplateRepo = sp.GetRequiredService<CosmosTemplateRepository>();
+                var sqlReportRepo = sp.GetRequiredService<ProjectReportRepository>();
+                var cosmosReportRepo = sp.GetRequiredService<CosmosProjectReportRepository>();
+                var sqlExportRepo = sp.GetRequiredService<ExportRepository>();
+                var cosmosExportRepo = sp.GetRequiredService<CosmosExportRepository>();
+                var sqlDescRepo = sp.GetRequiredService<DescriptionRepository>();
+                var cosmosDescRepo = sp.GetRequiredService<CosmosDescriptionRepository>();
+
+                var checks = new List<object>();
+                var writeSteps = new List<object>();
+                bool hadException = false;
+                bool allPassed = true;
+
+                // 1. TemplateRepository parity
+                try
+                {
+                    var sqlBytes = await sqlTemplateRepo.PopulateTemplate(1);
+                    var cosmosBytes = await cosmosTemplateRepo.PopulateTemplate(1);
+                    checks.Add(new
+                    {
+                        check = "Template.PopulateTemplate",
+                        sqlLen = sqlBytes?.Length ?? 0,
+                        cosmosLen = cosmosBytes?.Length ?? 0,
+                        match = (sqlBytes?.Length ?? 0) == (cosmosBytes?.Length ?? 0)
+                    });
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Template.PopulateTemplate", error = ex.Message });
+                }
+
+                // 2. ProjectReportRepository parity across 25 projects + 1 missing
+                var testProjectIds = Enumerable.Range(1, 25).Concat(new[] { 999999 }).ToList();
+                foreach (var pid in testProjectIds)
+                {
+                    try
+                    {
+                        var sqlParts = await sqlReportRepo.GetProjectTemplatebyProjectId(pid);
+                        var cosmosParts = await cosmosReportRepo.GetProjectTemplatebyProjectId(pid);
+                        checks.Add(ParityCompare.Lists($"Report.GetProjectTemplatebyProjectId({pid})", sqlParts, cosmosParts, x => x.PartId, false,
+                            ("PartId", x => x.PartId),
+                            ("PartName", x => x.PartName),
+                            ("SequenceNo", x => x.SequenceNo)));
+
+                        var sqlCard = await sqlReportRepo.GetGenericImagCardByName(pid, 1, Guid.Empty, 1);
+                        var cosmosCard = await cosmosReportRepo.GetGenericImagCardByName(pid, 1, Guid.Empty, 1);
+                        checks.Add(ParityCompare.Single($"Report.GetGenericImagCardByName({pid})", sqlCard, cosmosCard,
+                            ("Id", x => x?.Id),
+                            ("ProjectId", x => x?.ProjectId),
+                            ("TemplateId", x => x?.TemplateId),
+                            ("CardNumber", x => x?.CardNumber),
+                            ("CardName", x => x?.CardName),
+                            ("AdditionalDescription", x => x?.AdditionalDescription),
+                            ("CurrentCondition", x => x?.CurrentCondition),
+                            ("ImageId", x => x?.ImageId),
+                            ("IsActive", x => x?.IsActive)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Report.ProjectId_{pid}", error = ex.Message });
+                    }
+                }
+
+                // 3. ExportRepository parity
+                // All vessel types x parts
+                var testVesselTypeIds = new[] { 1, 2, 3, 4, 5, 999999 };
+                var testPartIds = new[] { 1, 2, 3, 4 };
+                foreach (var vtid in testVesselTypeIds)
+                {
+                    try
+                    {
+                        var sqlVtParts = await sqlExportRepo.GetVesselTypeExportPartConfiguration(vtid);
+                        var cosmosVtParts = await cosmosExportRepo.GetVesselTypeExportPartConfiguration(vtid);
+                        checks.Add(ParityCompare.Lists($"Export.GetVesselTypeExportPartConfiguration({vtid})", sqlVtParts, cosmosVtParts, x => x.PartId, false,
+                            ("PartId", x => x.PartId),
+                            ("PartName", x => x.PartName),
+                            ("RequiredInReport", x => x.RequiredInReport)));
+
+                        foreach (var partId in testPartIds)
+                        {
+                            var sqlVtSec = await sqlExportRepo.GetVesselTypeExportSectionConfiguration(partId, vtid);
+                            var cosmosVtSec = await cosmosExportRepo.GetVesselTypeExportSectionConfiguration(partId, vtid);
+                            checks.Add(ParityCompare.Lists($"Export.GetVesselTypeExportSectionConfiguration({partId},{vtid})", sqlVtSec, cosmosVtSec, x => x.SectionId, false,
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("RequiredInReport", x => x.RequiredInReport),
+                                ("TankTypeId", x => x.TankTypeId),
+                                ("TankType", x => x.TankType),
+                                ("IsSubSection", x => x.IsSubSection),
+                                ("ParentId", x => x.ParentId)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Export.VesselType_{vtid}", error = ex.Message });
+                    }
+                }
+
+                // Projects export configuration
+                foreach (var pid in testProjectIds.Take(5).Concat(new[] { 999999 }))
+                {
+                    try
+                    {
+                        var sqlProjParts = await sqlExportRepo.GetProjectExportPartConfiguration(pid);
+                        var cosmosProjParts = await cosmosExportRepo.GetProjectExportPartConfiguration(pid);
+                        checks.Add(ParityCompare.Lists($"Export.GetProjectExportPartConfiguration({pid})", sqlProjParts, cosmosProjParts, x => x.PartId, false,
+                            ("PartId", x => x.PartId),
+                            ("PartName", x => x.PartName),
+                            ("RequiredInReport", x => x.RequiredInReport)));
+
+                        foreach (var partId in testPartIds.Take(2))
+                        {
+                            var sqlProjSec = await sqlExportRepo.GetProjectExportSectionConfiguration(partId, pid);
+                            var cosmosProjSec = await cosmosExportRepo.GetProjectExportSectionConfiguration(partId, pid);
+                            checks.Add(ParityCompare.Lists($"Export.GetProjectExportSectionConfiguration({partId},{pid})", sqlProjSec, cosmosProjSec, x => x.SectionId, false,
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("RequiredInReport", x => x.RequiredInReport),
+                                ("TankTypeId", x => x.TankTypeId),
+                                ("TankType", x => x.TankType),
+                                ("IsSubSection", x => x.IsSubSection),
+                                ("ParentId", x => x.ParentId)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Export.Project_{pid}", error = ex.Message });
+                    }
+                }
+
+                // 4. DescriptionRepository parity
+                var testVesselNames = new[] { (string?)null, "Oil Tanker", "Chemical Carrier", "Bulk Carrier", "Container", "NONEXISTENT_VESSEL" };
+
+                // 4a. GetGradingTemplates
+                try
+                {
+                    var sqlGrad = await sqlDescRepo.GetGradingTemplates();
+                    var cosmosGrad = await cosmosDescRepo.GetGradingTemplates();
+                    checks.Add(ParityCompare.Lists("Desc.GetGradingTemplates(null)", sqlGrad, cosmosGrad, x => x.TemplateId, false,
+                        ("TemplateId", x => x.TemplateId),
+                        ("TemplateName", x => x.TemplateName)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Desc.GetGradingTemplates", error = ex.Message });
+                }
+
+                // 4b. GetGradingSections(0, null) & (t, vt) for every template x vessel type
+                var testTemplates = new[] { 0, 1, 2, 3, 4, 8, 9999 };
+                foreach (var vt in testVesselNames)
+                {
+                    foreach (var tId in testTemplates)
+                    {
+                        try
+                        {
+                            var sqlSecs = await sqlDescRepo.GetGradingSections(tId, vt!);
+                            var cosmosSecs = await cosmosDescRepo.GetGradingSections(tId, vt!);
+                            checks.Add(ParityCompare.Lists($"Desc.GetGradingSections({tId},{vt ?? "null"})", sqlSecs, cosmosSecs, x => (x.SectionId, x.TanktypeId, x.TemplateId, x.SectionName), false,
+                                ("SectionId", x => x.SectionId),
+                                ("TanktypeId", x => x.TanktypeId),
+                                ("TemplateId", x => x.TemplateId),
+                                ("SectionName", x => x.SectionName)));
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { check = $"Desc.GetGradingSections({tId},{vt ?? "null"})", error = ex.Message });
+                        }
+                    }
+                }
+
+                // 4c. GetAllDescription pages 1-3 + 0 + Total
+                foreach (var (pNum, pSize) in new[] { (1, 10), (2, 10), (3, 10), (1, 0) })
+                {
+                    try
+                    {
+                        var sqlAll = await sqlDescRepo.GetAllDescription(pNum, pSize);
+                        var cosmosAll = await cosmosDescRepo.GetAllDescription(pNum, pSize);
+                        checks.Add(new
+                        {
+                            check = $"Desc.GetAllDescription({pNum},{pSize}).Total",
+                            sqlTotal = sqlAll?.Total ?? 0,
+                            cosmosTotal = cosmosAll?.Total ?? 0,
+                            match = (sqlAll?.Total ?? 0) == (cosmosAll?.Total ?? 0)
+                        });
+                        checks.Add(ParityCompare.Lists($"Desc.GetAllDescription({pNum},{pSize}).Data", sqlAll?.Data ?? new List<ImageDescriptions>(), cosmosAll?.Data ?? new List<ImageDescriptions>(), x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("Description", x => x.Description),
+                            ("CategoryId", x => x.CategoryId),
+                            ("ProjectId", x => x.ProjectId),
+                            ("VesselType", x => x.VesselType),
+                            ("TemplateId", x => x.TemplateId),
+                            ("TemplateName", x => x.TemplateName),
+                            ("IsActive", x => x.IsActive),
+                            ("IsDeleted", x => x.IsDeleted),
+                            ("SectionId", x => x.SectionId),
+                            ("SectionName", x => x.SectionName),
+                            ("TankTypeId", x => x.TankTypeId)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Desc.GetAllDescription({pNum},{pSize})", error = ex.Message });
+                    }
+                }
+
+                // 4d. CheckImageDescriptionExistsOrNot for 10 real template descriptions + uppercase + missing
+                var checkTestCases = new[]
+                {
+                    ("Oil Tanker", "Slop Tank", "Part F", "Test"),
+                    ("Oil Tanker", "SLOP TANK", "PART F", "TEST"),
+                    ("Oil Tanker", "Slop Tank", "Part F", "Nonexistent Description 12345"),
+                    ("Chemical Carrier", "Cargo Tank 1P", "Part A", "Corrosion observed"),
+                    ("Bulk Carrier", "Hold 1", "Part A", "Damage"),
+                    ("Bulk Carrier", "HOLD 1", "PART A", "DAMAGE"),
+                    ("Container", "Bay 1", "Part B", "Wear and tear"),
+                    ("NonexistentVessel", "NoSection", "NoPart", "None"),
+                    ("Oil Tanker", "NoSection", "Part F", "Test"),
+                    ("Oil Tanker", "Slop Tank", "NoPart", "Test")
+                };
+
+                foreach (var tc in checkTestCases)
+                {
+                    try
+                    {
+                        var sqlC = await sqlDescRepo.CheckImageDescriptionExistsOrNot(tc.Item1, tc.Item2, tc.Item3, tc.Item4);
+                        var cosmosC = await cosmosDescRepo.CheckImageDescriptionExistsOrNot(tc.Item1, tc.Item2, tc.Item3, tc.Item4);
+                        checks.Add(ParityCompare.Lists($"Desc.CheckImageDescriptionExistsOrNot({tc.Item1},{tc.Item2})", sqlC, cosmosC, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("VesselType", x => x.VesselType),
+                            ("SectionId", x => x.SectionId),
+                            ("CategoryId", x => x.CategoryId),
+                            ("Description", x => x.Description),
+                            ("TemplateId", x => x.TemplateId)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Desc.CheckImageDescriptionExistsOrNot({tc.Item1},{tc.Item2})", error = ex.Message });
+                    }
+                }
+
+                // 4e. GetImageDescriptionsByProjectId
+                foreach (var pid in testProjectIds.Take(5).Concat(new[] { 999999 }))
+                {
+                    try
+                    {
+                        var sqlImg = await sqlDescRepo.GetImageDescriptionsByProjectId(pid);
+                        var cosmosImg = await cosmosDescRepo.GetImageDescriptionsByProjectId(pid);
+                        checks.Add(ParityCompare.Lists($"Desc.GetImageDescriptionsByProjectId({pid})", sqlImg, cosmosImg, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("Description", x => x.Description),
+                            ("CategoryId", x => x.CategoryId),
+                            ("ProjectId", x => x.ProjectId),
+                            ("IsActive", x => x.IsActive),
+                            ("IsDeleted", x => x.IsDeleted),
+                            ("SectionId", x => x.SectionId),
+                            ("SectionName", x => x.SectionName),
+                            ("TankTypeId", x => x.TankTypeId)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Desc.GetImageDescriptionsByProjectId({pid})", error = ex.Message });
+                    }
+                }
+
+                // 4f. GetImageDescriptionById
+                foreach (var descId in new[] { 1, 2, 3, 5, 10, 999999 })
+                {
+                    try
+                    {
+                        var sqlD = await sqlDescRepo.GetImageDescriptionById(descId);
+                        var cosmosD = await cosmosDescRepo.GetImageDescriptionById(descId);
+                        checks.Add(ParityCompare.Single($"Desc.GetImageDescriptionById({descId})", sqlD, cosmosD,
+                            ("Id", x => x?.Id),
+                            ("Description", x => x?.Description),
+                            ("CategoryId", x => x?.CategoryId),
+                            ("ProjectId", x => x?.ProjectId),
+                            ("IsActive", x => x?.IsActive),
+                            ("IsDeleted", x => x?.IsDeleted),
+                            ("VesselType", x => x?.VesselType)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Desc.GetImageDescriptionById({descId})", error = ex.Message });
+                    }
+                }
+
+                // Write tests: Cosmos only, writeTest=yes, project -999, vessel type PARITY-TEST
+                if (string.Equals(writeTest, "yes", StringComparison.OrdinalIgnoreCase))
+                {
+                    var factory = sp.GetRequiredService<ICosmosContainerFactory>();
+                    var cardContainer = factory.GetContainer(CosmosContainers.dbo_GenericImageCard);
+                    var descContainer = factory.GetContainer(CosmosContainers.dbo_ImageDescriptions);
+                    var vsdContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeSectionDescriptionMapping);
+                    var vtpContainer = factory.GetContainer(CosmosContainers.Config_VesselTypePartMapping);
+                    var vnsContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeNormalSectionMapping);
+                    var rpContainer = factory.GetContainer(CosmosContainers.Config_ReportPart);
+                    var psmContainer = factory.GetContainer(CosmosContainers.Config_ProjectSectionMapping);
+                    var projContainer = factory.GetContainer(CosmosContainers.CAP_Projects);
+                    var vtmContainer = factory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
+
+                    var testSecGuid = Guid.NewGuid();
+                    var testSecStr = testSecGuid.ToString();
+                    var testTankSecGuid = Guid.NewGuid();
+                    var testTankSecStr = testTankSecGuid.ToString();
+
+                    bool vtpOk = false;
+                    bool rpOk = false;
+                    bool vnsOk = false;
+                    bool psmUnchanged = false;
+                    bool psmOk = false;
+                    bool vtmPidMatchOk = false;
+                    bool vtmPidNoMatchOk = false;
+                    bool vtm0Ok = false;
+                    bool createDescRes1 = false;
+                    bool vsdCreated = false;
+                    bool noSecondMapping = false;
+                    bool updateDescRes = false;
+                    bool oldGone = false;
+                    bool newExists = false;
+                    bool datesApproxNow = false;
+                    bool createCardRes = false;
+                    bool guidEmptyKept = false;
+                    bool cardMoved = false;
+                    ImageDescriptionDocument? createdRealDoc = null;
+                    var trackedVsdIds = new List<string>();
+
+                    try
+                    {
+                        // 1. Create test rows first
+                        var vtpDoc = new VesselTypePartMappingDocument
+                        {
+                            id = "test-vtp--999",
+                            VesselTypePartMappingId = 9991,
+                            VesselTypeId = -999,
+                            PartName = "TEST-PART",
+                            RequiredInReport = false,
+                            IsActive = true,
+                            IsDeleted = false
+                        };
+                        await vtpContainer.CreateItemAsync(vtpDoc, new PartitionKey(-999.0));
+
+                        var vnsDoc = new VesselTypeNormalSectionMappingDocument
+                        {
+                            id = "test-vns--999",
+                            VesselTypeId = -999,
+                            VesselTypePartMappingId = 9991,
+                            SectionMappingId = testSecStr,
+                            SectionName = "TEST-NORMAL-SECTION",
+                            SubHeader = "KEEP",
+                            TotalCards = 7,
+                            RequiredInReport = false,
+                            IsActive = true,
+                            IsDeleted = false
+                        };
+                        await vnsContainer.CreateItemAsync(vnsDoc, new PartitionKey(-999.0));
+
+                        var rpDoc = new ReportPartDocument
+                        {
+                            id = "test-rp--999",
+                            PartId = 9991,
+                            ProjectId = -999,
+                            PartName = "TEST-REPORT-PART",
+                            RequiredInReport = false,
+                            IsActive = true,
+                            IsDeleted = false
+                        };
+                        await rpContainer.CreateItemAsync(rpDoc, new PartitionKey(-999.0));
+
+                        var psmDoc = new ProjectSectionMappingDocument
+                        {
+                            id = "test-psm--999",
+                            ProjectId = -999,
+                            SectionMappingId = testSecStr,
+                            SubHeader = "KEEP",
+                            TotalCards = 7,
+                            RequiredInReport = false,
+                            IsDeleted = false
+                        };
+                        await psmContainer.CreateItemAsync(psmDoc, new PartitionKey(-999.0));
+
+                        var projDoc = new ProjectDocument
+                        {
+                            id = "-999",
+                            ID = -999,
+                            IdProp = -999,
+                            IMO = 9999999
+                        };
+                        await projContainer.CreateItemAsync(projDoc, new PartitionKey("-999"));
+
+                        var vtmMatch = new VesselTankMappingDocument
+                        {
+                            id = "test-vtm-match",
+                            Id = testTankSecStr,
+                            ProjectId = -999,
+                            ImoNumber = "9999999",
+                            RequiredInReport = false,
+                            IsDeleted = false
+                        };
+                        await vtmContainer.CreateItemAsync(vtmMatch, new PartitionKey(-999.0));
+
+                        var vtmNoMatch = new VesselTankMappingDocument
+                        {
+                            id = "test-vtm-nomatch",
+                            Id = testTankSecStr,
+                            ProjectId = -999,
+                            ImoNumber = "1234567",
+                            RequiredInReport = false,
+                            IsDeleted = false
+                        };
+                        await vtmContainer.CreateItemAsync(vtmNoMatch, new PartitionKey(-999.0));
+
+                        writeSteps.Add(new { step = "TestRowsCreated", success = true });
+
+                        // 2. Run every Update*RequiredInReport branch and READ BACK
+                        // Part: VesselTypeId -999
+                        await cosmosExportRepo.UpdatePartRequiredInReportAsync(true, 9991, 0, -999, "parity_tester");
+                        var vtpRead = await vtpContainer.ReadItemAsync<VesselTypePartMappingDocument>("test-vtp--999", new PartitionKey(-999.0));
+                        vtpOk = vtpRead.Resource.RequiredInReport == true && vtpRead.Resource.ModifiedBy == "parity_tester";
+
+                        // Part: VesselTypeId 0, ProjectId -999
+                        await cosmosExportRepo.UpdatePartRequiredInReportAsync(true, 9991, -999, 0, "parity_tester");
+                        var rpRead = await rpContainer.ReadItemAsync<ReportPartDocument>("test-rp--999", new PartitionKey(-999.0));
+                        rpOk = rpRead.Resource.RequiredInReport == true && rpRead.Resource.ModifiedBy == "parity_tester";
+                        writeSteps.Add(new { step = "UpdatePartRequiredInReportBranches", vtpOk, rpOk });
+
+                        // Section: VesselTypeId -999: UpdateSectionRequiredInReportAsync(true, testSecGuid, 0, -999, "parity_tester") then read vns
+                        await cosmosExportRepo.UpdateSectionRequiredInReportAsync(true, testSecGuid, 0, -999, "parity_tester");
+                        var vnsRead = await vnsContainer.ReadItemAsync<VesselTypeNormalSectionMappingDocument>("test-vns--999", new PartitionKey(-999.0));
+                        vnsOk = vnsRead.Resource.RequiredInReport == true &&
+                                vnsRead.Resource.ModifiedBy == "parity_tester" &&
+                                vnsRead.Resource.SubHeader == "KEEP" &&
+                                vnsRead.Resource.TotalCards == 7;
+
+                        // Check the OTHER row (psm) is still unchanged (RequiredInReport == false)
+                        var psmReadBefore = await psmContainer.ReadItemAsync<ProjectSectionMappingDocument>("test-psm--999", new PartitionKey(-999.0));
+                        psmUnchanged = psmReadBefore.Resource.RequiredInReport == false;
+
+                        // Section: ProjectId -999: UpdateSectionRequiredInReportAsync(true, testSecGuid, -999, 0, "parity_tester") then read psm
+                        await cosmosExportRepo.UpdateSectionRequiredInReportAsync(true, testSecGuid, -999, 0, "parity_tester");
+                        var psmRead = await psmContainer.ReadItemAsync<ProjectSectionMappingDocument>("test-psm--999", new PartitionKey(-999.0));
+                        psmOk = psmRead.Resource.RequiredInReport == true &&
+                                psmRead.Resource.ModifiedBy == "parity_tester" &&
+                                psmRead.Resource.SubHeader == "KEEP" &&
+                                psmRead.Resource.TotalCards == 7;
+                        writeSteps.Add(new { step = "UpdateSectionRequiredInReportBranches", vnsOk, psmUnchanged, psmOk });
+
+                        // TankSection: ProjectId -999 (IMO match vs no match)
+                        await cosmosExportRepo.UpdateTankSectionRequiredInReportAsync(true, testTankSecGuid, -999, "parity_tester");
+                        var vtmMatchRead = await vtmContainer.ReadItemAsync<VesselTankMappingDocument>("test-vtm-match", new PartitionKey(-999.0));
+                        var vtmNoMatchRead = await vtmContainer.ReadItemAsync<VesselTankMappingDocument>("test-vtm-nomatch", new PartitionKey(-999.0));
+                        vtmPidMatchOk = vtmMatchRead.Resource.RequiredInReport == true && vtmMatchRead.Resource.UpdatedBy == "parity_tester";
+                        vtmPidNoMatchOk = vtmNoMatchRead.Resource.RequiredInReport == false; // unchanged
+
+                        // TankSection: ProjectId 0 (updates by SectionId only)
+                        await cosmosExportRepo.UpdateTankSectionRequiredInReportAsync(true, testTankSecGuid, 0, "parity_tester_0");
+                        var vtmNoMatchAfter0 = await vtmContainer.ReadItemAsync<VesselTankMappingDocument>("test-vtm-nomatch", new PartitionKey(-999.0));
+                        vtm0Ok = vtmNoMatchAfter0.Resource.RequiredInReport == true && vtmNoMatchAfter0.Resource.UpdatedBy == "parity_tester_0";
+                        writeSteps.Add(new { step = "UpdateTankSectionRequiredInReportBranches", vtmPidMatchOk, vtmPidNoMatchOk, vtm0Ok });
+
+                        // 3. CreateImageDescription with test normal section (Category max+1, call twice -> same Category, no second mapping)
+                        var testDesc1 = new ImageDescriptions
+                        {
+                            Description = "Batch6 Parity Created Desc 1",
+                            ProjectId = 0,
+                            VesselType = "PARITY-TEST",
+                            SectionId = testSecGuid,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdatedDttm = DateTime.UtcNow
+                        };
+                        createDescRes1 = await cosmosDescRepo.CreateImageDescription(testDesc1);
+
+                        // Check mapping row created in vsdContainer
+                        var vsdQ = new QueryDefinition("SELECT * FROM c WHERE c.SectionId = @secId").WithParameter("@secId", testSecStr);
+                        var vsdDocs = new List<VesselTypeSectionDescriptionMappingDocument>();
+                        using (var feed = vsdContainer.GetItemQueryIterator<VesselTypeSectionDescriptionMappingDocument>(vsdQ))
+                        {
+                            while (feed.HasMoreResults)
+                            {
+                                var resp = await feed.ReadNextAsync();
+                                vsdDocs.AddRange(resp);
+                            }
+                        }
+                        vsdCreated = vsdDocs.Count == 1 && vsdDocs.All(d => d.id == $"{d.SectionId}|{d.CategoryId}");
+                        trackedVsdIds.AddRange(vsdDocs.Select(d => d.id));
+                        var firstCatId = vsdDocs.Count > 0 ? vsdDocs[0].CategoryId : null;
+
+                        // Call CreateImageDescription second time with same section
+                        var testDesc2 = new ImageDescriptions
+                        {
+                            Description = "Batch6 Parity Created Desc 2",
+                            ProjectId = 0,
+                            VesselType = "PARITY-TEST",
+                            SectionId = testSecGuid,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdatedDttm = DateTime.UtcNow
+                        };
+                        var createDescRes2 = await cosmosDescRepo.CreateImageDescription(testDesc2);
+
+                        var vsdDocs2 = new List<VesselTypeSectionDescriptionMappingDocument>();
+                        using (var feed = vsdContainer.GetItemQueryIterator<VesselTypeSectionDescriptionMappingDocument>(vsdQ))
+                        {
+                            while (feed.HasMoreResults)
+                            {
+                                var resp = await feed.ReadNextAsync();
+                                vsdDocs2.AddRange(resp);
+                            }
+                        }
+                        trackedVsdIds.AddRange(vsdDocs2.Select(d => d.id).Except(trackedVsdIds));
+                        noSecondMapping = vsdDocs2.Count == 1 && vsdDocs2[0].CategoryId == firstCatId && vsdDocs2[0].id == $"{vsdDocs2[0].SectionId}|{vsdDocs2[0].CategoryId}";
+                        writeSteps.Add(new { step = "CreateImageDescription.NewCategoryAndNoDuplicateMapping", createDescRes1, vsdCreated, noSecondMapping });
+
+                        // 4. UpdateImageDescription on description just created (real Id), change ProjectId 0 -> -998
+                        // Find the real created item
+                        var descQ = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = 0 AND c.Description = 'Batch6 Parity Created Desc 1'");
+                        var descDocs = new List<ImageDescriptionDocument>();
+                        using (var feed = descContainer.GetItemQueryIterator<ImageDescriptionDocument>(descQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(0.0) }))
+                        {
+                            while (feed.HasMoreResults)
+                            {
+                                var resp = await feed.ReadNextAsync();
+                                descDocs.AddRange(resp);
+                            }
+                        }
+                        createdRealDoc = descDocs.FirstOrDefault();
+                        int realDescId = createdRealDoc?.Id ?? 0;
+
+                        if (createdRealDoc == null)
+                        {
+                            writeSteps.Add(new { step = "UpdateImageDescription.FindCreatedDoc", success = false, error = "createdRealDoc is null" });
+                        }
+                        else
+                        {
+                            var updateDescModel = new ImageDescriptions
+                            {
+                                Id = realDescId,
+                                Description = "Batch6 Parity Created Desc 1 Moved",
+                                ProjectId = -998,
+                                CategoryId = (int)(firstCatId ?? 0),
+                                VesselType = "PARITY-TEST",
+                                IsActive = true,
+                                IsDeleted = false
+                            };
+                            updateDescRes = await cosmosDescRepo.UpdateImageDescription(updateDescModel);
+
+                            // Check old item at pk 0 is gone
+                            var oldDescQ = new QueryDefinition("SELECT * FROM c WHERE c.Id = @id").WithParameter("@id", realDescId);
+                            var oldDescDocs = new List<ImageDescriptionDocument>();
+                            using (var feed = descContainer.GetItemQueryIterator<ImageDescriptionDocument>(oldDescQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(0.0) }))
+                            {
+                                while (feed.HasMoreResults)
+                                {
+                                    var resp = await feed.ReadNextAsync();
+                                    oldDescDocs.AddRange(resp);
+                                }
+                            }
+                            oldGone = oldDescDocs.Count == 0;
+
+                            // Check new item at pk -998 exists with CreatedDttm/UpdatedDttm approx now
+                            var newDescDocs = new List<ImageDescriptionDocument>();
+                            using (var feed = descContainer.GetItemQueryIterator<ImageDescriptionDocument>(oldDescQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(-998.0) }))
+                            {
+                                while (feed.HasMoreResults)
+                                {
+                                    var resp = await feed.ReadNextAsync();
+                                    newDescDocs.AddRange(resp);
+                                }
+                            }
+                            var movedDoc = newDescDocs.FirstOrDefault();
+                            newExists = movedDoc != null;
+                            datesApproxNow = movedDoc?.CreatedDttm.HasValue == true &&
+                                                  movedDoc?.UpdatedDttm.HasValue == true &&
+                                                  Math.Abs((movedDoc.CreatedDttm.Value - DateTime.Now).TotalMinutes) < 2 &&
+                                                  Math.Abs((movedDoc.UpdatedDttm.Value - DateTime.Now).TotalMinutes) < 2;
+
+                            writeSteps.Add(new { step = "UpdateImageDescription.PartitionMoveAndDates", updateDescRes, oldGone, newExists, datesApproxNow });
+                        }
+
+                        // 5. Card create -> read -> update with ProjectId change (-999 -> -998, check old partition empty and new partition found)
+                        var testCard = new GenericImageCard
+                        {
+                            ProjectId = -999,
+                            TemplateId = 1,
+                            SectionId = Guid.Empty,
+                            CardNumber = 999,
+                            CardName = "Batch6 Parity Test Card",
+                            DescriptionId = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdatedDttm = DateTime.UtcNow
+                        };
+                        createCardRes = await cosmosReportRepo.CreateGenericImageCard(testCard);
+                        var readCard = await cosmosReportRepo.GetGenericImagCardByName(-999, 1, Guid.Empty, 999);
+                        guidEmptyKept = readCard != null && readCard.SectionId == Guid.Empty;
+
+                        if (readCard != null)
+                        {
+                            readCard.ProjectId = -998;
+                            readCard.CardName = "Batch6 Parity Test Card Moved";
+                            var updateCardRes = await cosmosReportRepo.UpdateGenericImageCard(readCard);
+
+                            var oldCard = await cosmosReportRepo.GetGenericImagCardByName(-999, 1, Guid.Empty, 999);
+                            var newCard = await cosmosReportRepo.GetGenericImagCardByName(-998, 1, Guid.Empty, 999);
+                            cardMoved = updateCardRes && oldCard == null && newCard != null;
+                        }
+                        else
+                        {
+                            writeSteps.Add(new { step = "Card.ReadFailed", success = false, error = "readCard is null" });
+                        }
+                        writeSteps.Add(new { step = "Card.CreateReadMove", createCardRes, guidEmptyKept, cardMoved });
+
+                        // Check all write test booleans
+                        bool writePassed = vtpOk && rpOk && vnsOk && psmUnchanged && psmOk &&
+                                           vtmPidMatchOk && vtmPidNoMatchOk && vtm0Ok &&
+                                           createDescRes1 && vsdCreated && noSecondMapping &&
+                                           (createdRealDoc != null) && updateDescRes && oldGone && newExists && datesApproxNow &&
+                                           createCardRes && guidEmptyKept && cardMoved;
+                        if (!writePassed)
+                        {
+                            hadException = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        writeSteps.Add(new { step = "WriteTestException", error = ex.Message });
+                    }
+                    finally
+                    {
+                        // Delete EVERY test row. Do NOT swallow cleanup errors: add each failure to writeSteps and set allPassed = false.
+                        async Task TryCleanup(string stepName, Func<Task> action)
+                        {
+                            try
+                            {
+                                await action();
+                            }
+                            catch (Exception ex)
+                            {
+                                hadException = true;
+                                writeSteps.Add(new { step = $"CleanupFailed.{stepName}", error = ex.Message });
+                            }
+                        }
+
+                        await TryCleanup("VesselTypePartMapping", () => vtpContainer.DeleteItemAsync<VesselTypePartMappingDocument>("test-vtp--999", new PartitionKey(-999.0)));
+                        await TryCleanup("VesselTypeNormalSectionMapping", () => vnsContainer.DeleteItemAsync<VesselTypeNormalSectionMappingDocument>("test-vns--999", new PartitionKey(-999.0)));
+                        await TryCleanup("ReportPart", () => rpContainer.DeleteItemAsync<ReportPartDocument>("test-rp--999", new PartitionKey(-999.0)));
+                        await TryCleanup("ProjectSectionMapping", () => psmContainer.DeleteItemAsync<ProjectSectionMappingDocument>("test-psm--999", new PartitionKey(-999.0)));
+                        await TryCleanup("CAP_Projects", () => projContainer.DeleteItemAsync<ProjectDocument>("-999", new PartitionKey("-999")));
+                        await TryCleanup("VesselTankMapping.Match", () => vtmContainer.DeleteItemAsync<VesselTankMappingDocument>("test-vtm-match", new PartitionKey(-999.0)));
+                        await TryCleanup("VesselTankMapping.NoMatch", () => vtmContainer.DeleteItemAsync<VesselTankMappingDocument>("test-vtm-nomatch", new PartitionKey(-999.0)));
+                        foreach (var vid in trackedVsdIds)
+                        {
+                            await TryCleanup("VesselTypeSectionDescriptionMapping", () => vsdContainer.DeleteItemAsync<VesselTypeSectionDescriptionMappingDocument>(vid, new PartitionKey(vid)));
+                        }
+
+                        // Clean up image descriptions
+                        foreach (var p in new[] { -999, -998, 0 })
+                        {
+                            await TryCleanup($"ImageDescriptions.p{p}", async () =>
+                            {
+                                var q = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = @pid AND c.VesselType = 'PARITY-TEST'").WithParameter("@pid", p);
+                                using var feed = descContainer.GetItemQueryIterator<ImageDescriptionDocument>(q, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)p) });
+                                while (feed.HasMoreResults)
+                                {
+                                    var resp = await feed.ReadNextAsync();
+                                    foreach (var item in resp)
+                                    {
+                                        await descContainer.DeleteItemAsync<ImageDescriptionDocument>(item.id, new PartitionKey((double)p));
+                                    }
+                                }
+                            });
+                        }
+
+                        // Clean up generic image cards
+                        foreach (var p in new[] { -999, -998 })
+                        {
+                            await TryCleanup($"GenericImageCard.p{p}", async () =>
+                            {
+                                var q = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = @pid").WithParameter("@pid", p);
+                                using var feed = cardContainer.GetItemQueryIterator<GenericImageCardDocument>(q, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)p) });
+                                while (feed.HasMoreResults)
+                                {
+                                    var resp = await feed.ReadNextAsync();
+                                    foreach (var item in resp)
+                                    {
+                                        await cardContainer.DeleteItemAsync<GenericImageCardDocument>(item.id, new PartitionKey((double)p));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+
+                allPassed = allPassed && !hadException && checks.All(c =>
+                {
+                    var prop = c.GetType().GetProperty("equal") ?? c.GetType().GetProperty("match") ?? c.GetType().GetProperty("allMatch");
+                    if (prop != null)
+                    {
+                        var val = prop.GetValue(c);
+                        if (val is bool b) return b;
+                    }
+                    var errProp = c.GetType().GetProperty("error");
+                    if (errProp != null) return false;
+                    return true;
+                });
+
+                return Results.Ok(new
+                {
+                    batch = 6,
+                    allPassed,
+                    checksCount = checks.Count,
+                    checks,
+                    writeSteps
+                });
+            }).AllowAnonymous();
+        }
+
+        private static void MapParityBatch7(WebApplication app)
+        {
+            app.MapGet("/health/parity/batch7", async (
+                string? writeTest,
+                IConfiguration config,
+                IServiceProvider sp) =>
+            {
+                var db = sp.GetRequiredService<ApplicationDbContext>();
+                var conn = db.Database.GetDbConnection();
+                if (conn.State != System.Data.ConnectionState.Open)
+                {
+                    await conn.OpenAsync();
+                }
+
+                var sqlGradingRepo = sp.GetRequiredService<GradingRepository>();
+                var cosmosGradingRepo = sp.GetRequiredService<CosmosGradingRepository>();
+                var sqlTankRepo = sp.GetRequiredService<TankRepository>();
+                var cosmosTankRepo = sp.GetRequiredService<CosmosTankRepository>();
+
+                var checks = new List<object>();
+                var writeSteps = new List<object>();
+                bool hadException = false;
+                bool allPassed = true;
+
+                // Load reference data from DB
+                var vesselTypes = (await conn.QueryAsync<string>(
+                    "SELECT DISTINCT VesselType FROM [dbo].[VesselType] WHERE VesselType IS NOT NULL ORDER BY VesselType")).ToList();
+                var templates = (await conn.QueryAsync<(int Id, string Name)>(
+                    "SELECT Id, TemplateName FROM [dbo].[ReportTemplate] WHERE TemplateName IS NOT NULL ORDER BY Id")).ToList();
+                var projectIds = (await conn.QueryAsync<int>(
+                    "SELECT DISTINCT TOP 25 ID FROM [CAP].[Projects] WHERE ID IS NOT NULL ORDER BY ID")).ToList();
+                var imos = (await conn.QueryAsync<int>(
+                    "SELECT DISTINCT TOP 25 IMO FROM [CAP].[Projects] WHERE IMO IS NOT NULL AND IMO > 0 ORDER BY IMO")).ToList();
+
+                // C15: LeadSurveyor (up to 2) and SecondSurveyor (1 that only matches SecondSurveyor)
+                var leadSurveyors = (await conn.QueryAsync<string>(
+                    "SELECT DISTINCT TOP 2 LeadSurveyor FROM [CAP].[Projects] WHERE LeadSurveyor IS NOT NULL AND LeadSurveyor != '' ORDER BY LeadSurveyor")).ToList();
+                var secondOnlySurveyors = (await conn.QueryAsync<string>(
+                    @"SELECT DISTINCT TOP 1 SecondSurveyor FROM [CAP].[Projects] 
+                      WHERE SecondSurveyor IS NOT NULL AND SecondSurveyor != '' 
+                        AND SecondSurveyor NOT IN (SELECT LeadSurveyor FROM [CAP].[Projects] WHERE LeadSurveyor IS NOT NULL AND LeadSurveyor != '') 
+                      ORDER BY SecondSurveyor")).ToList();
+
+                var surveyorNamesToTest = new List<string?> { null };
+                surveyorNamesToTest.AddRange(leadSurveyors);
+                surveyorNamesToTest.AddRange(secondOnlySurveyors);
+                if (surveyorNamesToTest.Count < 3)
+                {
+                    checks.Add(new { check = "Tank.GetTanks_Vessel real surveyor count check", info = $"Found {surveyorNamesToTest.Count - 1} real surveyor names in DB" });
+                }
+
+                // C8: First 25 projects with tanks + 1 missing
+                var projectsWithTanks = (await conn.QueryAsync<(int ProjectId, string ImoNumber)>(
+                    @"SELECT DISTINCT TOP 25 vtm.ProjectId, vtm.ImoNumber 
+                      FROM [dbo].[Vessel_TankMapping] vtm 
+                      WHERE vtm.ProjectId IS NOT NULL AND vtm.ImoNumber IS NOT NULL AND vtm.ImoNumber != ''")).ToList();
+
+                // C9: Real tanks (top 10)
+                var realTanks = (await conn.QueryAsync<(Guid Id, int? ProjectId)>(
+                    "SELECT DISTINCT TOP 10 Id, ProjectId FROM [dbo].[Vessel_TankMapping] WHERE Id IS NOT NULL")).ToList();
+
+                // C11: Tank types by vessel type
+                var vtTankTypes = (await conn.QueryAsync<(string VesselType, int TankTypeId)>(
+                    "SELECT DISTINCT VesselType, TankTypeId FROM [dbo].[Vessel_TankMapping] WHERE VesselType IS NOT NULL AND TankTypeId IS NOT NULL")).ToList();
+                var vtTankTypeMap = vtTankTypes.GroupBy(x => x.VesselType, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Select(x => x.TankTypeId).Distinct().ToList(), StringComparer.OrdinalIgnoreCase);
+
+                // C12: Real TankImageCards (top 10)
+                var realCards = (await conn.QueryAsync<(int ProjectId, int TemplateId, Guid SectionId, int CardNumber)>(
+                    "SELECT DISTINCT TOP 10 ProjectId, TemplateId, SectionId, CardNumber FROM [dbo].[TankImageCard] WHERE ProjectId IS NOT NULL AND SectionId IS NOT NULL AND CardNumber IS NOT NULL")).ToList();
+
+                // C13: Real Vessel_GradingMapping IDs (top 50) + 1 missing
+                var vgmIds = (await conn.QueryAsync<int>(
+                    "SELECT DISTINCT TOP 50 Id FROM [dbo].[Vessel_GradingMapping] WHERE Id IS NOT NULL ORDER BY Id")).ToList();
+                vgmIds.Add(99999999);
+
+                // C14: Seeds for VT and IMO branches of GetTemplateTanks
+                var vtBranchSeed = await conn.QueryFirstOrDefaultAsync<(int TemplateId, string VesselType)>(
+                    "SELECT TOP 1 TemplateId, VesselType FROM [dbo].[Config_VesselTypeTankSectionMapping] WHERE TemplateId IS NOT NULL AND VesselType IS NOT NULL");
+                var imoBranchSeed = await conn.QueryFirstOrDefaultAsync<(string ImoNumber, int ProjectId, int TemplateId)>(
+                    @"SELECT TOP 1 vtm.ImoNumber, vtm.ProjectId, ISNULL(tt.TemplateId, 1) as TemplateId 
+                      FROM [dbo].[Vessel_TankMapping] vtm 
+                      INNER JOIN [dbo].[TankType] tt ON tt.Id = vtm.TankTypeId 
+                      WHERE vtm.ImoNumber IS NOT NULL AND vtm.ImoNumber != '' AND vtm.ProjectId IS NOT NULL AND vtm.ProjectId > 0 AND vtm.IsDeleted = 0");
+
+                // 1. Grading reads
+                // 1a. GetAllGradingAsync (C16)
+                try
+                {
+                    var sqlAllGrading = await sqlGradingRepo.GetAllGradingAsync();
+                    var cosmosAllGrading = await cosmosGradingRepo.GetAllGradingAsync();
+                    checks.Add(ParityCompare.Lists("Grading.GetAllGradingAsync",
+                        sqlAllGrading, cosmosAllGrading,
+                        null, true,
+                        ("GradingId", x => x.GradingId),
+                        ("GradingName", x => x.GradingName),
+                        ("TanktypeId", x => x.TanktypeId),
+                        ("TemplateId", x => x.TemplateId),
+                        ("TemplateName", x => x.TemplateName),
+                        ("SectionId", x => x.SectionId),
+                        ("SectionName", x => x.SectionName),
+                        ("VesselType", x => x.VesselType),
+                        ("ProjectId", x => x.ProjectId),
+                        ("IsActive", x => x.IsActive),
+                        ("IsDeleted", x => x.IsDeleted),
+                        ("RequiredInReport", x => x.RequiredInReport)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Grading.GetAllGradingAsync", error = ex.Message });
+                }
+
+                // 1b. GetGradingTemplates
+                try
+                {
+                    var sqlTemplates = await sqlGradingRepo.GetGradingTemplates();
+                    var cosmosTemplates = await cosmosGradingRepo.GetGradingTemplates();
+                    checks.Add(ParityCompare.Lists("Grading.GetGradingTemplates",
+                        sqlTemplates, cosmosTemplates,
+                        x => x.TemplateId, false,
+                        ("TemplateId", x => x.TemplateId),
+                        ("TemplateName", x => x.TemplateName)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Grading.GetGradingTemplates", error = ex.Message });
+                }
+
+                // 1c. GetGradingTemplatesByVesselType (every vessel type)
+                foreach (var vt in vesselTypes)
+                {
+                    try
+                    {
+                        var sqlVt = await sqlGradingRepo.GetGradingTemplatesByVesselType(vt);
+                        var cosmosVt = await cosmosGradingRepo.GetGradingTemplatesByVesselType(vt);
+                        checks.Add(ParityCompare.Lists($"Grading.GetGradingTemplatesByVesselType({vt})",
+                            sqlVt, cosmosVt,
+                            x => x.TemplateId, false,
+                            ("TemplateId", x => x.TemplateId),
+                            ("TemplateName", x => x.TemplateName)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Grading.GetGradingTemplatesByVesselType({vt})", error = ex.Message });
+                    }
+                }
+
+                // 1d. GetGradingSectionNamesByTemplateNameAndVesselType (C10, C17: every template & every vessel type, ordered)
+                foreach (var tpl in templates)
+                {
+                    foreach (var vt in vesselTypes)
+                    {
+                        try
+                        {
+                            var sqlSec = await sqlGradingRepo.GetGradingSectionNamesByTemplateNameAndVesselType(tpl.Name, vt);
+                            var cosmosSec = await cosmosGradingRepo.GetGradingSectionNamesByTemplateNameAndVesselType(tpl.Name, vt);
+                            checks.Add(ParityCompare.Lists($"Grading.GetGradingSectionNames({tpl.Name}, {vt})",
+                                sqlSec, cosmosSec,
+                                null, true,
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("TanktypeId", x => x.TanktypeId),
+                                ("TemplateId", x => x.TemplateId)));
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { check = $"Grading.GetGradingSectionNames({tpl.Name}, {vt})", error = ex.Message });
+                        }
+                    }
+                }
+
+                // 1e. GetGradingSections (C10, C17: every template & every vessel type, ordered)
+                foreach (var tpl in templates)
+                {
+                    foreach (var vt in vesselTypes)
+                    {
+                        try
+                        {
+                            var sqlSec = await sqlGradingRepo.GetGradingSections(tpl.Id, vt);
+                            var cosmosSec = await cosmosGradingRepo.GetGradingSections(tpl.Id, vt);
+                            checks.Add(ParityCompare.Lists($"Grading.GetGradingSections({tpl.Id}, {vt})",
+                                sqlSec, cosmosSec,
+                                null, true, // SQL orders by [Order]
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("TanktypeId", x => x.TanktypeId),
+                                ("TemplateId", x => x.TemplateId)));
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { check = $"Grading.GetGradingSections({tpl.Id}, {vt})", error = ex.Message });
+                        }
+                    }
+                }
+
+                // 1f. GetAllGrading_Pagination (C18: NotSupportedException check)
+                try
+                {
+                    await cosmosGradingRepo.GetAllGrading_Pagination(1, 10);
+                    checks.Add(new { check = "Grading.GetAllGrading_Pagination (NotSupportedException)", equal = false, error = "Expected NotSupportedException but no exception was thrown" });
+                    allPassed = false;
+                }
+                catch (NotSupportedException)
+                {
+                    checks.Add(new { check = "Grading.GetAllGrading_Pagination (NotSupportedException)", equal = true });
+                }
+                catch (Exception ex)
+                {
+                    checks.Add(new { check = "Grading.GetAllGrading_Pagination (NotSupportedException)", equal = false, error = $"Expected NotSupportedException but got {ex.GetType().Name}: {ex.Message}" });
+                    allPassed = false;
+                }
+
+                // 2. Tank reads
+                // 2a. GetShipType (C17: unordered compare with Id key)
+                try
+                {
+                    var sqlShip = await sqlTankRepo.GetShipType();
+                    var cosmosShip = await cosmosTankRepo.GetShipType();
+                    checks.Add(ParityCompare.Lists("Tank.GetShipType",
+                        sqlShip, cosmosShip,
+                        x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("VesselType", x => x.VesselType)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Tank.GetShipType", error = ex.Message });
+                }
+
+                // 2b. GetVesselType (C17: unordered compare with VesselType key)
+                try
+                {
+                    var sqlVt = await sqlTankRepo.GetVesselType();
+                    var cosmosVt = await cosmosTankRepo.GetVesselType();
+                    checks.Add(ParityCompare.Lists("Tank.GetVesselType",
+                        sqlVt, cosmosVt,
+                        x => x.VesselType, false,
+                        ("VesselType", x => x.VesselType)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Tank.GetVesselType", error = ex.Message });
+                }
+
+                // 2c. GetVesselIMONo (C16: IMO and VesselName)
+                try
+                {
+                    var sqlImo = await sqlTankRepo.GetVesselIMONo();
+                    var cosmosImo = await cosmosTankRepo.GetVesselIMONo();
+                    checks.Add(ParityCompare.Lists("Tank.GetVesselIMONo",
+                        sqlImo, cosmosImo,
+                        null, true,
+                        ("IMO", x => x.IMO),
+                        ("VesselName", x => x.VesselName)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Tank.GetVesselIMONo", error = ex.Message });
+                }
+
+                // 2d. GetVesselTypeList
+                try
+                {
+                    var sqlVtl = await sqlTankRepo.GetVesselTypeList();
+                    var cosmosVtl = await cosmosTankRepo.GetVesselTypeList();
+                    checks.Add(ParityCompare.Lists("Tank.GetVesselTypeList",
+                        sqlVtl, cosmosVtl,
+                        null, true,
+                        ("ID", x => x.ID),
+                        ("IMO", x => x.IMO),
+                        ("Name", x => x.Name),
+                        ("VesselType", x => x.VesselType),
+                        ("CombinedDescription", x => x.CombinedDescription)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Tank.GetVesselTypeList", error = ex.Message });
+                }
+
+                // 2e. GetTanks_Vessel (C15, C16, C17: null + real LeadSurveyor and SecondSurveyor, ProjectName, ordered if name != null)
+                foreach (var sName in surveyorNamesToTest)
+                {
+                    try
+                    {
+                        var sqlTv = await sqlTankRepo.GetTanks_Vessel(sName);
+                        var cosmosTv = await cosmosTankRepo.GetTanks_Vessel(sName);
+                        bool isOrdered = sName != null;
+                        checks.Add(ParityCompare.Lists($"Tank.GetTanks_Vessel({sName ?? "null"})",
+                            sqlTv, cosmosTv,
+                            isOrdered ? null : x => (object)x.TankId, isOrdered,
+                            ("TankId", x => x.TankId),
+                            ("TankName", x => x.TankName),
+                            ("VesselType", x => x.VesselType),
+                            ("VesselName", x => x.VesselName),
+                            ("IMONumber", x => x.IMONumber),
+                            ("TankType", x => x.TankType),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("Status", x => x.Status),
+                            ("IsActive", x => x.IsActive),
+                            ("IsDeleted", x => x.IsDeleted),
+                            ("IsDownload", x => x.IsDownload),
+                            ("Subheader", x => x.Subheader),
+                            ("ProjectId", x => x.ProjectId),
+                            ("ProjectName", x => x.ProjectName)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetTanks_Vessel({sName ?? "null"})", error = ex.Message });
+                    }
+                }
+
+                // 2f. GetTanks_VesselByIMO (C16: first 25 + 1 missing, full columns)
+                var imosToTest = new List<int>(imos);
+                imosToTest.Add(99999999);
+                foreach (var imo in imosToTest)
+                {
+                    try
+                    {
+                        var sqlImo = await sqlTankRepo.GetTanks_VesselByIMO(imo.ToString());
+                        var cosmosImo = await cosmosTankRepo.GetTanks_VesselByIMO(imo.ToString());
+                        checks.Add(ParityCompare.Lists($"Tank.GetTanks_VesselByIMO({imo})",
+                            sqlImo, cosmosImo,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("ImoNumber", x => x.ImoNumber),
+                            ("VesselType", x => x.VesselType),
+                            ("VesselName", x => x.VesselName),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("Subheader", x => x.Subheader),
+                            ("TankName", x => x.TankName),
+                            ("ProjectId", x => x.ProjectId),
+                            ("IsDeleted", x => x.IsDeleted),
+                            ("IsActive", x => x.IsActive),
+                            ("RequiredInReport", x => x.RequiredInReport),
+                            ("CreatedDttm", x => x.CreatedDttm),
+                            ("UpdateDttm", x => x.UpdateDttm),
+                            ("TemplateId", x => x.TemplateId)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetTanks_VesselByIMO({imo})", error = ex.Message });
+                    }
+                }
+
+                // 2g. GetTanks_VesselByProject (C8, C16: real project IMOs + 1 missing, full columns)
+                var testProjectsWithTanks = new List<(int ProjectId, string ImoNumber)>(projectsWithTanks);
+                testProjectsWithTanks.Add((-999, "99999999"));
+                foreach (var p in testProjectsWithTanks)
+                {
+                    try
+                    {
+                        var sqlProj = await sqlTankRepo.GetTanks_VesselByProject(p.ImoNumber, p.ProjectId);
+                        var cosmosProj = await cosmosTankRepo.GetTanks_VesselByProject(p.ImoNumber, p.ProjectId);
+                        checks.Add(ParityCompare.Lists($"Tank.GetTanks_VesselByProject({p.ImoNumber}, {p.ProjectId})",
+                            sqlProj, cosmosProj,
+                            null, true, // SQL orders by TankTypeId, TankName, CreatedDttm
+                            ("Id", x => x.Id),
+                            ("ImoNumber", x => x.ImoNumber),
+                            ("VesselType", x => x.VesselType),
+                            ("VesselName", x => x.VesselName),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("Subheader", x => x.Subheader),
+                            ("TankName", x => x.TankName),
+                            ("ProjectId", x => x.ProjectId),
+                            ("IsDeleted", x => x.IsDeleted),
+                            ("IsActive", x => x.IsActive),
+                            ("RequiredInReport", x => x.RequiredInReport),
+                            ("CreatedDttm", x => x.CreatedDttm),
+                            ("UpdateDttm", x => x.UpdateDttm),
+                            ("TemplateId", x => x.TemplateId)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetTanks_VesselByProject({p.ImoNumber}, {p.ProjectId})", error = ex.Message });
+                    }
+                }
+
+                // 2h. GetTanks_VesselByVesselType (C16: every vessel type, full columns)
+                foreach (var vt in vesselTypes)
+                {
+                    try
+                    {
+                        var sqlVt = await sqlTankRepo.GetTanks_VesselByVesselType(vt);
+                        var cosmosVt = await cosmosTankRepo.GetTanks_VesselByVesselType(vt);
+                        checks.Add(ParityCompare.Lists($"Tank.GetTanks_VesselByVesselType({vt})",
+                            sqlVt, cosmosVt,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("ImoNumber", x => x.ImoNumber),
+                            ("VesselType", x => x.VesselType),
+                            ("VesselName", x => x.VesselName),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("Subheader", x => x.Subheader),
+                            ("TankName", x => x.TankName),
+                            ("ProjectId", x => x.ProjectId),
+                            ("IsDeleted", x => x.IsDeleted),
+                            ("IsActive", x => x.IsActive),
+                            ("RequiredInReport", x => x.RequiredInReport),
+                            ("CreatedDttm", x => x.CreatedDttm),
+                            ("UpdateDttm", x => x.UpdateDttm),
+                            ("TemplateId", x => x.TemplateId)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetTanks_VesselByVesselType({vt})", error = ex.Message });
+                    }
+                }
+
+                // 2i. GetVessel_GradingByVesselType (C16: every vessel type, full columns)
+                foreach (var vt in vesselTypes)
+                {
+                    try
+                    {
+                        var sqlVg = await sqlTankRepo.GetVessel_GradingByVesselType(vt);
+                        var cosmosVg = await cosmosTankRepo.GetVessel_GradingByVesselType(vt);
+                        checks.Add(ParityCompare.Lists($"Tank.GetVessel_GradingByVesselType({vt})",
+                            sqlVg, cosmosVg,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("VesselType", x => x.VesselType),
+                            ("VesselName", x => x.VesselName),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("GradingName", x => x.GradingName),
+                            ("GradingGroupId", x => x.GradingGroupId),
+                            ("GradingConditionGroupId", x => x.GradingConditionGroupId),
+                            ("IsActive", x => x.IsActive),
+                            ("ProjectId", x => x.ProjectId),
+                            ("RequiredInReport", x => x.RequiredInReport),
+                            ("CreatedDttm", x => x.CreatedDttm),
+                            ("UpdateDttm", x => x.UpdateDttm),
+                            ("TemplateId", x => x.TemplateId)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetVessel_GradingByVesselType({vt})", error = ex.Message });
+                    }
+                }
+
+                // 2j. GetTankTypes (C10: both overloads, no Take limits, project 0 and first 25 projects)
+                try
+                {
+                    var sqlTt = await sqlTankRepo.GetTankTypes();
+                    var cosmosTt = await cosmosTankRepo.GetTankTypes();
+                    checks.Add(ParityCompare.Lists("Tank.GetTankTypes()",
+                        sqlTt, cosmosTt,
+                        x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("TankType", x => x.TankType),
+                        ("TankName", x => x.TankName),
+                        ("TemplateId", x => x.TemplateId)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Tank.GetTankTypes()", error = ex.Message });
+                }
+
+                var pidsForTankTypes = new List<int> { 0 };
+                pidsForTankTypes.AddRange(projectIds);
+                foreach (var pid in pidsForTankTypes)
+                {
+                    foreach (var vt in vesselTypes)
+                    {
+                        try
+                        {
+                            var sqlTtOverload = await sqlTankRepo.GetTankTypes(pid, vt);
+                            var cosmosTtOverload = await cosmosTankRepo.GetTankTypes(pid, vt);
+                            checks.Add(ParityCompare.Lists($"Tank.GetTankTypes({pid}, {vt})",
+                                sqlTtOverload, cosmosTtOverload,
+                                x => x.Id, false,
+                                ("Id", x => x.Id),
+                                ("TankType", x => x.TankType),
+                                ("TankName", x => x.TankName),
+                                ("TemplateId", x => x.TemplateId)));
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { check = $"Tank.GetTankTypes({pid}, {vt})", error = ex.Message });
+                        }
+                    }
+                }
+
+                // 2k. GetTemplateTanks (C14, C16: VT branch, IMO branch, no-branch; assert counts > 0)
+                if (!string.IsNullOrEmpty(vtBranchSeed.VesselType))
+                {
+                    try
+                    {
+                        var sqlTtV = await sqlTankRepo.GetTemplateTanks(vtBranchSeed.TemplateId, null, vtBranchSeed.VesselType, 0);
+                        var cosmosTtV = await cosmosTankRepo.GetTemplateTanks(vtBranchSeed.TemplateId, null, vtBranchSeed.VesselType, 0);
+                        bool sqlCountOk = sqlTtV.Count > 0;
+                        if (!sqlCountOk) allPassed = false;
+                        checks.Add(new { check = "Tank.GetTemplateTanks(VT branch) count > 0", equal = sqlCountOk, sqlCount = sqlTtV.Count, cosmosCount = cosmosTtV.Count });
+                        checks.Add(ParityCompare.Lists("Tank.GetTemplateTanks(VT branch)",
+                            sqlTtV, cosmosTtV,
+                            null, true,
+                            ("OrderNumber", x => x.OrderNumber),
+                            ("Id", x => x.Id),
+                            ("TankName", x => x.TankName),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("Subheader", x => x.Subheader),
+                            ("CurrentconditionPlaceholders", x => x.CurrentconditionPlaceholders)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = "Tank.GetTemplateTanks(VT branch)", error = ex.Message });
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(imoBranchSeed.ImoNumber))
+                {
+                    try
+                    {
+                        var sqlTtI = await sqlTankRepo.GetTemplateTanks(imoBranchSeed.TemplateId, imoBranchSeed.ImoNumber, "NON_EXISTING_VESSEL_TYPE", imoBranchSeed.ProjectId);
+                        var cosmosTtI = await cosmosTankRepo.GetTemplateTanks(imoBranchSeed.TemplateId, imoBranchSeed.ImoNumber, "NON_EXISTING_VESSEL_TYPE", imoBranchSeed.ProjectId);
+                        bool sqlCountOk = sqlTtI.Count > 0;
+                        if (!sqlCountOk) allPassed = false;
+                        checks.Add(new { check = "Tank.GetTemplateTanks(IMO branch) count > 0", equal = sqlCountOk, sqlCount = sqlTtI.Count, cosmosCount = cosmosTtI.Count });
+                        checks.Add(ParityCompare.Lists("Tank.GetTemplateTanks(IMO branch)",
+                            sqlTtI, cosmosTtI,
+                            null, true,
+                            ("OrderNumber", x => x.OrderNumber),
+                            ("Id", x => x.Id),
+                            ("TankName", x => x.TankName),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("Subheader", x => x.Subheader),
+                            ("CurrentconditionPlaceholders", x => x.CurrentconditionPlaceholders)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = "Tank.GetTemplateTanks(IMO branch)", error = ex.Message });
+                    }
+                }
+
+                try
+                {
+                    var sqlTtN = await sqlTankRepo.GetTemplateTanks(1, null, null, 0);
+                    var cosmosTtN = await cosmosTankRepo.GetTemplateTanks(1, null, null, 0);
+                    checks.Add(ParityCompare.Lists("Tank.GetTemplateTanks(No branch)",
+                        sqlTtN, cosmosTtN,
+                        null, true,
+                        ("OrderNumber", x => x.OrderNumber)));
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    checks.Add(new { check = "Tank.GetTemplateTanks(No branch)", error = ex.Message });
+                }
+
+                // 2l. GetTemplateTankGrading (C11: every vessel type x (0 and all tank types) x (0 and first 25 projects))
+                var pidsForGrading = new List<int> { 0 };
+                pidsForGrading.AddRange(projectIds);
+                foreach (var vt in vesselTypes)
+                {
+                    var ttIds = new HashSet<int> { 0 };
+                    if (vtTankTypeMap.TryGetValue(vt, out var list))
+                    {
+                        foreach (var id in list) ttIds.Add(id);
+                    }
+                    foreach (var ttId in ttIds)
+                    {
+                        foreach (var pid in pidsForGrading)
+                        {
+                            try
+                            {
+                                var sqlTtg = await sqlTankRepo.GetTemplateTankGrading(ttId, pid, vt);
+                                var cosmosTtg = await cosmosTankRepo.GetTemplateTankGrading(ttId, pid, vt);
+                                checks.Add(ParityCompare.Lists($"Tank.GetTemplateTankGrading({ttId}, {pid}, {vt})",
+                                    sqlTtg, cosmosTtg,
+                                    null, true, // SQL orders by TankTypeId, Name
+                                    ("Id", x => x.Id),
+                                    ("Name", x => x.Name),
+                                    ("Value", x => x.Value),
+                                    ("GradingConditionGroupId", x => x.GradingConditionGroupId),
+                                    ("RequiredInReport", x => x.RequiredInReport),
+                                    ("TankTypeId", x => x.TankTypeId),
+                                    ("SectionId", x => x.SectionId)));
+                            }
+                            catch (Exception ex)
+                            {
+                                hadException = true;
+                                checks.Add(new { check = $"Tank.GetTemplateTankGrading({ttId}, {pid}, {vt})", error = ex.Message });
+                            }
+                        }
+                    }
+                }
+
+                // 2m. GetTemplateTankGradingCondition (C13: real vgmIds + 99999999)
+                foreach (var gId in vgmIds)
+                {
+                    try
+                    {
+                        var sqlCnd = await sqlTankRepo.GetTemplateTankGradingCondition(gId);
+                        var cosmosCnd = await cosmosTankRepo.GetTemplateTankGradingCondition(gId);
+                        checks.Add(ParityCompare.Lists($"Tank.GetTemplateTankGradingCondition({gId})",
+                            sqlCnd, cosmosCnd,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("Name", x => x.Name),
+                            ("Value", x => x.Value)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetTemplateTankGradingCondition({gId})", error = ex.Message });
+                    }
+                }
+
+                // 2n & 2o. GetProjectTankImageCard and GetProjectTankImagCardByName (C12, C16: real cards + Guid.Empty + missing)
+                var cardsToTest = new List<(int ProjectId, int TemplateId, Guid SectionId, int CardNumber)>(realCards);
+                if (projectIds.Count > 0)
+                {
+                    cardsToTest.Add((projectIds[0], 1, Guid.Empty, 1));
+                }
+                cardsToTest.Add((-999, 9999, Guid.NewGuid(), 9999));
+
+                foreach (var c in cardsToTest)
+                {
+                    try
+                    {
+                        var sqlCard = await sqlTankRepo.GetProjectTankImageCard(c.ProjectId, c.TemplateId, c.SectionId);
+                        var cosmosCard = await cosmosTankRepo.GetProjectTankImageCard(c.ProjectId, c.TemplateId, c.SectionId);
+                        checks.Add(ParityCompare.Lists($"Tank.GetProjectTankImageCard({c.ProjectId}, {c.TemplateId}, {c.SectionId})",
+                            sqlCard, cosmosCard,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("ProjectId", x => x.ProjectId),
+                            ("TemplateId", x => x.TemplateId),
+                            ("SectionId", x => x.SectionId),
+                            ("CardNumber", x => x.CardNumber),
+                            ("CardName", x => x.CardName),
+                            ("DescriptionId", x => x.DescriptionId),
+                            ("AdditionalDescription", x => x.AdditionalDescription),
+                            ("CurrentCondition", x => x.CurrentCondition),
+                            ("ImageId", x => x.ImageId),
+                            ("IsActive", x => x.IsActive),
+                            ("CreatedDttm", x => x.CreatedDttm),
+                            ("UpdatedDttm", x => x.UpdatedDttm),
+                            ("src", x => x.src)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetProjectTankImageCard({c.ProjectId}, {c.TemplateId}, {c.SectionId})", error = ex.Message });
+                    }
+
+                    try
+                    {
+                        var sqlCardName = await sqlTankRepo.GetProjectTankImagCardByName(c.ProjectId, c.TemplateId, c.SectionId, c.CardNumber);
+                        var cosmosCardName = await cosmosTankRepo.GetProjectTankImagCardByName(c.ProjectId, c.TemplateId, c.SectionId, c.CardNumber);
+                        checks.Add(ParityCompare.Single($"Tank.GetProjectTankImagCardByName({c.ProjectId}, {c.TemplateId}, {c.SectionId}, {c.CardNumber})",
+                            sqlCardName, cosmosCardName,
+                            ("Id", x => x?.Id),
+                            ("ProjectId", x => x?.ProjectId),
+                            ("TemplateId", x => x?.TemplateId),
+                            ("SectionId", x => x?.SectionId),
+                            ("CardNumber", x => x?.CardNumber),
+                            ("CardName", x => x?.CardName),
+                            ("DescriptionId", x => x?.DescriptionId),
+                            ("AdditionalDescription", x => x?.AdditionalDescription),
+                            ("CurrentCondition", x => x?.CurrentCondition),
+                            ("ImageId", x => x?.ImageId),
+                            ("IsActive", x => x?.IsActive),
+                            ("CreatedDttm", x => x?.CreatedDttm),
+                            ("UpdatedDttm", x => x?.UpdatedDttm),
+                            ("src", x => x?.src)));
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetProjectTankImagCardByName({c.ProjectId}, {c.TemplateId}, {c.SectionId}, {c.CardNumber})", error = ex.Message });
+                    }
+                }
+
+                // 2p. GetTanks_VesselById (C9, C16: real tanks + missing with null, 0, and real project)
+                var tanksToTest = new List<(Guid Id, int? ProjectId)>(realTanks);
+                tanksToTest.Add((Guid.NewGuid(), (int?)0));
+
+                foreach (var t in tanksToTest)
+                {
+                    var pids = new List<int?> { null, 0 };
+                    if (t.ProjectId.HasValue && t.ProjectId.Value != 0)
+                    {
+                        pids.Add(t.ProjectId.Value);
+                    }
+                    foreach (var pid in pids)
+                    {
+                        try
+                        {
+                            var sqlTvId = await sqlTankRepo.GetTanks_VesselById(t.Id, pid);
+                            var cosmosTvId = await cosmosTankRepo.GetTanks_VesselById(t.Id, pid);
+                            checks.Add(ParityCompare.Single($"Tank.GetTanks_VesselById({t.Id}, {pid?.ToString() ?? "null"})",
+                                sqlTvId, cosmosTvId,
+                                ("Id", x => x?.Id),
+                                ("VesselType", x => x?.VesselType),
+                                ("ImoNumber", x => x?.ImoNumber),
+                                ("TankTypeId", x => x?.TankTypeId),
+                                ("TankName", x => x?.TankName),
+                                ("IsActive", x => x?.IsActive),
+                                ("CreatedDttm", x => x?.CreatedDttm),
+                                ("UpdateDttm", x => x?.UpdateDttm),
+                                ("IsDeleted", x => x?.IsDeleted),
+                                ("Subheader", x => x?.Subheader),
+                                ("RequiredInReport", x => x?.RequiredInReport),
+                                ("ProjectId", x => x?.ProjectId)));
+                        }
+                        catch (Exception ex)
+                        {
+                            hadException = true;
+                            checks.Add(new { check = $"Tank.GetTanks_VesselById({t.Id}, {pid?.ToString() ?? "null"})", error = ex.Message });
+                        }
+                    }
+                }
+
+                // 2q. GetProjectNames (real IMO, null, "abc")
+                foreach (var imoStr in new[] { imos.FirstOrDefault().ToString(), null, "abc" })
+                {
+                    try
+                    {
+                        var sqlPn = await sqlTankRepo.GetProjectNames(imoStr);
+                        var cosmosPn = await cosmosTankRepo.GetProjectNames(imoStr);
+                        bool bothNull = sqlPn == null && cosmosPn == null;
+                        if (sqlPn == null || cosmosPn == null)
+                        {
+                            checks.Add(new { check = $"Tank.GetProjectNames({imoStr ?? "null"}) null check", equal = bothNull, sqlNull = sqlPn == null, cosmosNull = cosmosPn == null });
+                            if (!bothNull) allPassed = false;
+                        }
+                        if (sqlPn != null && cosmosPn != null)
+                        {
+                            checks.Add(ParityCompare.Lists($"Tank.GetProjectNames({imoStr ?? "null"})",
+                                sqlPn, cosmosPn,
+                                x => x.Value, false,
+                                ("Value", x => x.Value),
+                                ("Text", x => x.Text),
+                                ("ProjectId", x => x.ProjectId)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        checks.Add(new { check = $"Tank.GetProjectNames({imoStr ?? "null"})", error = ex.Message });
+                    }
+                }
+
+                // 2r. GetShipTypes (C18: NotImplementedException check)
+                try
+                {
+                    await cosmosTankRepo.GetShipTypes();
+                    checks.Add(new { check = "Tank.GetShipTypes (NotImplementedException)", equal = false, error = "Expected NotImplementedException but no exception was thrown" });
+                    allPassed = false;
+                }
+                catch (NotImplementedException)
+                {
+                    checks.Add(new { check = "Tank.GetShipTypes (NotImplementedException)", equal = true });
+                }
+                catch (Exception ex)
+                {
+                    checks.Add(new { check = "Tank.GetShipTypes (NotImplementedException)", equal = false, error = $"Expected NotImplementedException but got {ex.GetType().Name}: {ex.Message}" });
+                    allPassed = false;
+                }
+
+                // Write tests: Cosmos only, writeTest=yes, project -999, vessel type PARITY-TEST
+                if (string.Equals(writeTest, "yes", StringComparison.OrdinalIgnoreCase))
+                {
+                    var factory = sp.GetRequiredService<ICosmosContainerFactory>();
+                    var gradingContainer = factory.GetContainer(CosmosContainers.dbo_Grading);
+                    var vgmContainer = factory.GetContainer(CosmosContainers.dbo_Vessel_GradingMapping);
+                    var vtmContainer = factory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
+                    var cardContainer = factory.GetContainer(CosmosContainers.dbo_TankImageCard);
+                    var vtsgmContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeSectionGradingMapping);
+                    var projectsContainer = factory.GetContainer(CosmosContainers.CAP_Projects);
+
+                    // C25: Exact ID tracking collections - NO partition sweeps!
+                    var trackedGrading = new List<(string id, double partitionKey)>();
+                    var trackedVgm = new List<(string id, double partitionKey)>();
+                    var trackedVtm = new List<(string id, double partitionKey)>();
+                    var trackedCard = new List<(string id, double partitionKey)>();
+                    var trackedVtsgm = new List<string>();
+                    var trackedProjects = new List<(string id, string partitionKey)>();
+
+                    var cleanupErrors = new List<string>();
+                    async Task TryCleanup(string name, Func<Task> action)
+                    {
+                        try { await action(); }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                        catch (Exception ex) { cleanupErrors.Add($"{name}: {ex.Message}"); }
+                    }
+
+                    async Task<TDoc?> SafeReadAsync<TDoc>(Container container, string id, PartitionKey pk) where TDoc : class
+                    {
+                        try
+                        {
+                            var r = await container.ReadItemAsync<TDoc>(id, pk);
+                            return r.Resource;
+                        }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        {
+                            return null;
+                        }
+                    }
+
+                    var testSecGuid = Guid.NewGuid();
+                    var templateGradingId = 999901;
+
+                    try
+                    {
+                        // 1. CreateProjectSectionGrading
+                        // C4: CreateItemAsync only; on 409 fail step and skip template steps
+                        var templateDoc = new GradingDocument
+                        {
+                            id = templateGradingId.ToString(),
+                            Id = templateGradingId,
+                            LabelName = "Parity Test Section",
+                            GradingGroupId = 9991,
+                            GradingConditionGroupId = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            VesselType = "PARITY-TEST",
+                            ProjectId = 0,
+                            RequiredInReport = true
+                        };
+                        bool templateCreated = false;
+                        try
+                        {
+                            await gradingContainer.CreateItemAsync(templateDoc, new PartitionKey((double)0));
+                            templateCreated = true;
+                            trackedGrading.Add((templateDoc.id, 0));
+                        }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+                        {
+                            allPassed = false;
+                            writeSteps.Add(new { step = "Grading.CreateItemAsync(template)", passed = false, error = "409 Conflict: id 999901 already exists in partition 0" });
+                        }
+
+                        // C19: verify copyCount == exact template row count and read back
+                        if (templateCreated)
+                        {
+                            var copyCount = await cosmosGradingRepo.CreateProjectSectionGrading(-999, "PARITY-TEST");
+                            bool copyOk = copyCount == 1;
+                            writeSteps.Add(new { step = "Grading.CreateProjectSectionGrading", passed = copyOk, copyCount });
+                            if (!copyOk) allPassed = false;
+
+                            var qCopies = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -999 AND c.VesselType = 'PARITY-TEST'");
+                            using var feedCopies = gradingContainer.GetItemQueryIterator<GradingDocument>(qCopies, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                            int readBackCount = 0;
+                            while (feedCopies.HasMoreResults)
+                            {
+                                var resp = await feedCopies.ReadNextAsync();
+                                foreach (var doc in resp)
+                                {
+                                    readBackCount++;
+                                    trackedGrading.Add((doc.id, -999));
+                                    bool propsOk = doc.LabelName == templateDoc.LabelName 
+                                        && doc.GradingGroupId == templateDoc.GradingGroupId 
+                                        && doc.GradingConditionGroupId == templateDoc.GradingConditionGroupId 
+                                        && doc.IsActive == true 
+                                        && doc.IsDeleted != true 
+                                        && doc.ProjectId == -999 
+                                        && doc.RequiredInReport == true;
+                                    writeSteps.Add(new { step = $"Grading.CreateProjectSectionGrading readback ({doc.id})", passed = propsOk });
+                                    if (!propsOk) allPassed = false;
+                                }
+                            }
+                            bool readCountOk = readBackCount == 1;
+                            writeSteps.Add(new { step = "Grading.CreateProjectSectionGrading readBackCount == 1", passed = readCountOk, readBackCount });
+                            if (!readCountOk) allPassed = false;
+                        }
+                        else
+                        {
+                            writeSteps.Add(new { step = "Grading.CreateProjectSectionGrading", passed = false, skipped = true });
+                        }
+
+                        // 2. Create_Vessel_Grading
+                        // 2a. Valid (both repos) - C5 read back every column of valid case
+                        var validVg = new VesselTankGrading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            TankTypeId = 1,
+                            GradingName = "Test VG",
+                            GradingGroupId = "1",
+                            GradingConditionGroupId = "1",
+                            IsActive = true,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdateDttm = DateTime.UtcNow,
+                            RequiredInReport = true
+                        };
+                        var createVgRes = await cosmosGradingRepo.CreateVessel_Grading(validVg);
+                        writeSteps.Add(new { step = "Grading.CreateVessel_Grading(valid)", passed = createVgRes });
+                        if (!createVgRes) allPassed = false;
+
+                        var vgQ = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -999 AND c.GradingName = 'Test VG'");
+                        using var vgFeed = vgmContainer.GetItemQueryIterator<VesselGradingMappingDocument>(vgQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                        VesselGradingMappingDocument? vgDoc = null;
+                        if (vgFeed.HasMoreResults)
+                        {
+                            var r = await vgFeed.ReadNextAsync();
+                            vgDoc = r.FirstOrDefault();
+                        }
+                        bool vgDocOk = vgDoc != null 
+                            && vgDoc.GradingName == "Test VG" 
+                            && vgDoc.GradingGroupId == 1 
+                            && vgDoc.GradingConditionGroupId == 1 
+                            && vgDoc.TankTypeId == 1 
+                            && vgDoc.VesselType == "PARITY-TEST" 
+                            && vgDoc.IsActive == true 
+                            && vgDoc.ProjectId == -999 
+                            && vgDoc.RequiredInReport == true;
+                        if (vgDoc != null) trackedVgm.Add((vgDoc.id, -999));
+                        writeSteps.Add(new { step = "Grading.CreateVessel_Grading readback", passed = vgDocOk, docFound = vgDoc != null });
+                        if (!vgDocOk) allPassed = false;
+
+                        var validVgTank = new VesselTankGrading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            TankTypeId = 2,
+                            GradingName = "Test VG Tank",
+                            GradingGroupId = "2",
+                            GradingConditionGroupId = "1",
+                            IsActive = true,
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdateDttm = DateTime.UtcNow,
+                            RequiredInReport = true
+                        };
+                        var tankCreateVgRes = await cosmosTankRepo.CreateVessel_Grading(validVgTank);
+                        writeSteps.Add(new { step = "Tank.CreateVessel_Grading(valid)", passed = tankCreateVgRes });
+                        if (!tankCreateVgRes) allPassed = false;
+
+                        var vgTankQ = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -999 AND c.GradingName = 'Test VG Tank'");
+                        using var vgTankFeed = vgmContainer.GetItemQueryIterator<VesselGradingMappingDocument>(vgTankQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                        VesselGradingMappingDocument? vgTankDoc = null;
+                        if (vgTankFeed.HasMoreResults)
+                        {
+                            var r = await vgTankFeed.ReadNextAsync();
+                            vgTankDoc = r.FirstOrDefault();
+                        }
+                        bool vgTankDocOk = vgTankDoc != null 
+                            && vgTankDoc.GradingName == "Test VG Tank" 
+                            && vgTankDoc.GradingGroupId == 2 
+                            && vgTankDoc.GradingConditionGroupId == 1 
+                            && vgTankDoc.TankTypeId == 2 
+                            && vgTankDoc.VesselType == "PARITY-TEST" 
+                            && vgTankDoc.IsActive == true 
+                            && vgTankDoc.ProjectId == -999 
+                            && vgTankDoc.RequiredInReport == true;
+                        if (vgTankDoc != null) trackedVgm.Add((vgTankDoc.id, -999));
+                        writeSteps.Add(new { step = "Tank.CreateVessel_Grading readback", passed = vgTankDocOk, docFound = vgTankDoc != null });
+                        if (!vgTankDocOk) allPassed = false;
+
+                        // 2b. Invalid: non-number string for GradingGroupId -> false (with valid dates)
+                        var invalidVgNum = new VesselTankGrading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            GradingGroupId = "abc",
+                            GradingConditionGroupId = "1",
+                            CreatedDttm = DateTime.UtcNow,
+                            UpdateDttm = DateTime.UtcNow
+                        };
+                        var createVgInvalidNum = await cosmosGradingRepo.CreateVessel_Grading(invalidVgNum);
+                        bool invalidNumOk = !createVgInvalidNum;
+                        writeSteps.Add(new { step = "Grading.CreateVessel_Grading(non-numeric string)", passed = invalidNumOk });
+                        if (!invalidNumOk) allPassed = false;
+
+                        var tankInvalidNum = await cosmosTankRepo.CreateVessel_Grading(invalidVgNum);
+                        bool tankInvalidNumOk = !tankInvalidNum;
+                        writeSteps.Add(new { step = "Tank.CreateVessel_Grading(non-numeric string)", passed = tankInvalidNumOk });
+                        if (!tankInvalidNumOk) allPassed = false;
+
+                        // 2c. Invalid: date < 1753 -> false
+                        var invalidVgDate = new VesselTankGrading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            GradingGroupId = "1",
+                            GradingConditionGroupId = "1",
+                            CreatedDttm = new DateTime(1600, 1, 1),
+                            UpdateDttm = DateTime.UtcNow
+                        };
+                        var createVgInvalidDate = await cosmosGradingRepo.CreateVessel_Grading(invalidVgDate);
+                        bool invalidDateOk = !createVgInvalidDate;
+                        writeSteps.Add(new { step = "Grading.CreateVessel_Grading(date < 1753)", passed = invalidDateOk });
+                        if (!invalidDateOk) allPassed = false;
+
+                        var tankInvalidDate = await cosmosTankRepo.CreateVessel_Grading(invalidVgDate);
+                        bool tankInvalidDateOk = !tankInvalidDate;
+                        writeSteps.Add(new { step = "Tank.CreateVessel_Grading(date < 1753)", passed = tankInvalidDateOk });
+                        if (!tankInvalidDateOk) allPassed = false;
+
+                        // 2d. Invalid: default(DateTime) -> false
+                        var defaultVgDate = new VesselTankGrading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            GradingGroupId = "1",
+                            GradingConditionGroupId = "1",
+                            CreatedDttm = default,
+                            UpdateDttm = DateTime.UtcNow
+                        };
+                        var createVgDefaultDate = await cosmosGradingRepo.CreateVessel_Grading(defaultVgDate);
+                        bool defaultDateOk = !createVgDefaultDate;
+                        writeSteps.Add(new { step = "Grading.CreateVessel_Grading(default date)", passed = defaultDateOk });
+                        if (!defaultDateOk) allPassed = false;
+
+                        var tankDefaultDate = await cosmosTankRepo.CreateVessel_Grading(defaultVgDate);
+                        bool tankDefaultDateOk = !tankDefaultDate;
+                        writeSteps.Add(new { step = "Tank.CreateVessel_Grading(default date)", passed = tankDefaultDateOk });
+                        if (!tankDefaultDateOk) allPassed = false;
+
+                        // 3. CreateTankGradingAsync (C20: check GradingGroupId, TankTypeId, VesselType, IsActive, RequiredInReport, ProjectId)
+                        var tankGrading = new Grading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            GradingName = "  Spaced Tank Grading  ",
+                            TanktypeId = 1,
+                            IsActive = true,
+                            RequiredInReport = true
+                        };
+                        var createTgRes = await cosmosGradingRepo.CreateTankGradingAsync(tankGrading);
+                        writeSteps.Add(new { step = "Grading.CreateTankGradingAsync", passed = createTgRes });
+                        if (!createTgRes) allPassed = false;
+
+                        var tgQ = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -999 AND c.GradingName = 'Spaced Tank Grading'");
+                        using var tgFeed = vgmContainer.GetItemQueryIterator<VesselGradingMappingDocument>(tgQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                        VesselGradingMappingDocument? tgDoc = null;
+                        if (tgFeed.HasMoreResults)
+                        {
+                            var r = await tgFeed.ReadNextAsync();
+                            tgDoc = r.FirstOrDefault();
+                        }
+                        bool tgDocOk = tgDoc != null 
+                            && tgDoc.GradingName == "Spaced Tank Grading" 
+                            && tgDoc.GradingGroupId != null 
+                            && tgDoc.TankTypeId == 1 
+                            && tgDoc.VesselType == "PARITY-TEST" 
+                            && tgDoc.IsActive == true 
+                            && tgDoc.RequiredInReport == true 
+                            && tgDoc.ProjectId == -999 
+                            && tgDoc.GradingConditionGroupId == 1 
+                            && tgDoc.CreatedDttm == null 
+                            && tgDoc.UpdateDttm == null 
+                            && tgDoc.IsDeleted == false;
+                        if (tgDoc != null) trackedVgm.Add((tgDoc.id, -999));
+                        writeSteps.Add(new { step = "Grading.CreateTankGradingAsync readback", passed = tgDocOk, docFound = tgDoc != null });
+                        if (!tgDocOk) allPassed = false;
+
+                        // 4. UpdateTankGradingAsync (C21: ensure non-null UpdateDttm first, test partition move, test missing Id returns false)
+                        if (tgDoc != null)
+                        {
+                            tgDoc.UpdateDttm = DateTime.UtcNow;
+                            await vgmContainer.ReplaceItemAsync(tgDoc, tgDoc.id, new PartitionKey((double)-999));
+
+                            var updateTg = new Grading
+                            {
+                                GradingId = tgDoc.Id,
+                                ProjectId = -998,
+                                GradingName = "  Updated Spaced  ",
+                                TanktypeId = 1
+                            };
+                            var updateTgRes = await cosmosGradingRepo.UpdateTankGradingAsync(updateTg);
+                            var oldTgQ = new QueryDefinition("SELECT * FROM c WHERE c.Id = @id").WithParameter("@id", tgDoc.Id);
+                            using var oldTgFeed = vgmContainer.GetItemQueryIterator<VesselGradingMappingDocument>(oldTgQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                            bool oldTgGone = true;
+                            if (oldTgFeed.HasMoreResults)
+                            {
+                                var r = await oldTgFeed.ReadNextAsync();
+                                oldTgGone = !r.Any();
+                            }
+                            using var newTgFeed = vgmContainer.GetItemQueryIterator<VesselGradingMappingDocument>(oldTgQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-998) });
+                            VesselGradingMappingDocument? newTgDoc = null;
+                            if (newTgFeed.HasMoreResults)
+                            {
+                                var r = await newTgFeed.ReadNextAsync();
+                                newTgDoc = r.FirstOrDefault();
+                            }
+                            if (newTgDoc != null) trackedVgm.Add((newTgDoc.id, -998));
+                            bool newTgOk = updateTgRes && oldTgGone && newTgDoc != null && newTgDoc.GradingName == "  Updated Spaced  " && newTgDoc.UpdateDttm == null && newTgDoc.CreatedDttm == null;
+                            writeSteps.Add(new { step = "Grading.UpdateTankGradingAsync partition move & UpdateDttm NULL", passed = newTgOk, oldTgGone, newExists = newTgDoc != null, updateDttmNull = newTgDoc?.UpdateDttm == null });
+                            if (!newTgOk) allPassed = false;
+                        }
+
+                        // C21: Test updating missing Id returns false
+                        var missingTg = new Grading
+                        {
+                            GradingId = 99999998,
+                            ProjectId = -999,
+                            GradingName = "Missing Grading",
+                            TanktypeId = 1
+                        };
+                        var missingTgRes = await cosmosGradingRepo.UpdateTankGradingAsync(missingTg);
+                        bool missingTgOk = !missingTgRes;
+                        writeSteps.Add(new { step = "Grading.UpdateTankGradingAsync(missing Id -> false)", passed = missingTgOk });
+                        if (!missingTgOk) allPassed = false;
+
+                        // 5. CreateSectionGradingAsync (C22: call 1 creates mapping, call 2 reuses mapping)
+                        var secGrading1 = new Grading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            SectionId = testSecGuid,
+                            GradingName = "Last Visit Date for Under Water Body Survey  "
+                        };
+                        var createSg1Res = await cosmosGradingRepo.CreateSectionGradingAsync(secGrading1);
+                        var vtsgmQ = new QueryDefinition("SELECT * FROM c WHERE c.SectionId = @secId").WithParameter("@secId", testSecGuid.ToString());
+                        using var vtsgmFeed = vtsgmContainer.GetItemQueryIterator<VesselTypeSectionGradingMappingDocument>(vtsgmQ);
+                        var vtsgmDocs = new List<VesselTypeSectionGradingMappingDocument>();
+                        while (vtsgmFeed.HasMoreResults)
+                        {
+                            var r = await vtsgmFeed.ReadNextAsync();
+                            vtsgmDocs.AddRange(r);
+                        }
+                        var vtsgmDoc = vtsgmDocs.FirstOrDefault();
+                        foreach (var d in vtsgmDocs) trackedVtsgm.Add(d.id);
+
+                        var sg1Q = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -999 AND c.LabelName = 'Last Visit Date for Under Water Body Survey'");
+                        using var sg1Feed = gradingContainer.GetItemQueryIterator<GradingDocument>(sg1Q, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                        GradingDocument? sg1Doc = null;
+                        if (sg1Feed.HasMoreResults)
+                        {
+                            var r = await sg1Feed.ReadNextAsync();
+                            sg1Doc = r.FirstOrDefault();
+                        }
+                        if (sg1Doc != null) trackedGrading.Add((sg1Doc.id, -999));
+
+                        bool vtsgmCreated = vtsgmDocs.Count == 1
+                            && vtsgmDoc != null 
+                            && vtsgmDoc.id == $"{testSecGuid}|{vtsgmDoc.CategoryId}"
+                            && vtsgmDoc.CreatedBy == "System" 
+                            && vtsgmDoc.IsActive == true 
+                            && vtsgmDoc.IsDeleted == false 
+                            && vtsgmDoc.CreatedOn.HasValue && vtsgmDoc.CreatedOn.Value.Date == DateTime.UtcNow.Date;
+
+                        bool sg1Ok = createSg1Res 
+                            && vtsgmCreated 
+                            && sg1Doc != null 
+                            && sg1Doc.GradingConditionGroupId == null 
+                            && sg1Doc.LabelName == "Last Visit Date for Under Water Body Survey" 
+                            && sg1Doc.GradingGroupId == vtsgmDoc!.CategoryId;
+                        writeSteps.Add(new { step = "Grading.CreateSectionGradingAsync(call 1 new mapping)", passed = sg1Ok, vtsgmCreated, docFound = sg1Doc != null });
+                        if (!sg1Ok) allPassed = false;
+
+                        // Call 2: same SectionId -> reuses mapping
+                        var secGrading2 = new Grading
+                        {
+                            ProjectId = -999,
+                            VesselType = "PARITY-TEST",
+                            SectionId = testSecGuid,
+                            GradingName = "Regular Section Grading  "
+                        };
+                        var createSg2Res = await cosmosGradingRepo.CreateSectionGradingAsync(secGrading2);
+
+                        using var vtsgmFeed2 = vtsgmContainer.GetItemQueryIterator<VesselTypeSectionGradingMappingDocument>(vtsgmQ);
+                        var vtsgmDocs2 = new List<VesselTypeSectionGradingMappingDocument>();
+                        while (vtsgmFeed2.HasMoreResults)
+                        {
+                            var r = await vtsgmFeed2.ReadNextAsync();
+                            vtsgmDocs2.AddRange(r);
+                        }
+                        var vtsgmDoc2 = vtsgmDocs2.FirstOrDefault();
+                        foreach (var d in vtsgmDocs2) trackedVtsgm.Add(d.id);
+
+                        bool mappingUnchanged = vtsgmDocs2.Count == 1
+                            && vtsgmDoc2 != null 
+                            && vtsgmDoc != null
+                            && vtsgmDoc2.id == $"{testSecGuid}|{vtsgmDoc2.CategoryId}"
+                            && vtsgmDoc2.CategoryId == vtsgmDoc.CategoryId 
+                            && vtsgmDoc2.CreatedOn == vtsgmDoc.CreatedOn;
+
+                        var sg2Q = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -999 AND c.LabelName = 'Regular Section Grading'");
+                        using var sg2Feed = gradingContainer.GetItemQueryIterator<GradingDocument>(sg2Q, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                        GradingDocument? sg2Doc = null;
+                        if (sg2Feed.HasMoreResults)
+                        {
+                            var r = await sg2Feed.ReadNextAsync();
+                            sg2Doc = r.FirstOrDefault();
+                        }
+                        if (sg2Doc != null) trackedGrading.Add((sg2Doc.id, -999));
+
+                        bool sg2Ok = createSg2Res 
+                            && mappingUnchanged 
+                            && sg2Doc != null 
+                            && sg2Doc.GradingConditionGroupId == 1 
+                            && sg2Doc.LabelName == "Regular Section Grading" 
+                            && sg2Doc.GradingGroupId == vtsgmDoc.CategoryId;
+                        writeSteps.Add(new { step = "Grading.CreateSectionGradingAsync(call 2 reuse mapping)", passed = sg2Ok, mappingUnchanged, docFound = sg2Doc != null });
+                        if (!sg2Ok) allPassed = false;
+
+                        // 6. UpdateSectionGradingAsync (including partition move to -998)
+                        if (sg2Doc != null)
+                        {
+                            var updateSg = new Grading
+                            {
+                                GradingId = sg2Doc.Id,
+                                ProjectId = -998,
+                                GradingName = "  Updated Section Label  "
+                            };
+                            var updateSgRes = await cosmosGradingRepo.UpdateSectionGradingAsync(updateSg);
+                            var oldSgQ = new QueryDefinition("SELECT * FROM c WHERE c.Id = @id").WithParameter("@id", sg2Doc.Id);
+                            using var oldSgFeed = gradingContainer.GetItemQueryIterator<GradingDocument>(oldSgQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                            bool oldSgGone = true;
+                            if (oldSgFeed.HasMoreResults)
+                            {
+                                var r = await oldSgFeed.ReadNextAsync();
+                                oldSgGone = !r.Any();
+                            }
+                            using var newSgFeed = gradingContainer.GetItemQueryIterator<GradingDocument>(oldSgQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-998) });
+                            GradingDocument? newSgDoc = null;
+                            if (newSgFeed.HasMoreResults)
+                            {
+                                var r = await newSgFeed.ReadNextAsync();
+                                newSgDoc = r.FirstOrDefault();
+                            }
+                            if (newSgDoc != null) trackedGrading.Add((newSgDoc.id, -998));
+                            bool updateSgOk = updateSgRes && oldSgGone && newSgDoc != null && newSgDoc.LabelName == "  Updated Section Label  " && newSgDoc.GradingConditionGroupId == 1;
+                            writeSteps.Add(new { step = "Grading.UpdateSectionGradingAsync partition move", passed = updateSgOk, oldSgGone, newExists = newSgDoc != null });
+                            if (!updateSgOk) allPassed = false;
+                        }
+
+                        // 7. DeleteGradingAsync (C24: test wrong TankId returns false, nothing changed)
+                        if (sg1Doc != null)
+                        {
+                            var delWrong1 = await cosmosGradingRepo.DeleteGradingAsync(sg1Doc.Id, 999);
+                            var readSg1Unchanged = await SafeReadAsync<GradingDocument>(gradingContainer, sg1Doc.id, new PartitionKey((double)-999));
+                            bool wrong1Ok = !delWrong1 && readSg1Unchanged != null && readSg1Unchanged.IsDeleted == false;
+                            writeSteps.Add(new { step = "Grading.DeleteGradingAsync(wrong TankId != 0 -> false)", passed = wrong1Ok });
+                            if (!wrong1Ok) allPassed = false;
+
+                            var delRes0 = await cosmosGradingRepo.DeleteGradingAsync(sg1Doc.Id, 0);
+                            var delDoc0 = await SafeReadAsync<GradingDocument>(gradingContainer, sg1Doc.id, new PartitionKey((double)-999));
+                            bool del0Ok = delRes0 && delDoc0 != null && delDoc0.IsDeleted == true;
+                            writeSteps.Add(new { step = "Grading.DeleteGradingAsync(tankId=0)", passed = del0Ok });
+                            if (!del0Ok) allPassed = false;
+                        }
+
+                        if (tgDoc != null)
+                        {
+                            var delWrong2 = await cosmosGradingRepo.DeleteGradingAsync(tgDoc.Id, 0);
+                            var readTgUnchanged = await SafeReadAsync<VesselGradingMappingDocument>(vgmContainer, tgDoc.id, new PartitionKey((double)-998));
+                            bool wrong2Ok = !delWrong2 && readTgUnchanged != null && readTgUnchanged.IsDeleted == false;
+                            writeSteps.Add(new { step = "Grading.DeleteGradingAsync(wrong TankId == 0 -> false)", passed = wrong2Ok });
+                            if (!wrong2Ok) allPassed = false;
+
+                            var delResT = await cosmosGradingRepo.DeleteGradingAsync(tgDoc.Id, 1);
+                            var delDocT = await SafeReadAsync<VesselGradingMappingDocument>(vgmContainer, tgDoc.id, new PartitionKey((double)-998));
+                            bool delTOk = delResT && delDocT != null && delDocT.IsDeleted == true;
+                            writeSteps.Add(new { step = "Grading.DeleteGradingAsync(tankId!=0)", passed = delTOk });
+                            if (!delTOk) allPassed = false;
+                        }
+
+                        // 8. Create_Vessel_TankMapping (C23: check every column, CreatedDttm/UpdateDttm close to now)
+                        var tankGuid = Guid.NewGuid();
+                        var vtDoc1 = new VesselTank
+                        {
+                            Id = tankGuid,
+                            ProjectId = -999,
+                            TankName = "Test Vessel Tank",
+                            Subheader = "Sub 1",
+                            ImoNumber = "9999999",
+                            TankTypeId = 1,
+                            VesselType = "PARITY-TEST",
+                            IsActive = true,
+                            RequiredInReport = true
+                        };
+                        var createVtRes1 = await cosmosTankRepo.CreateTank(vtDoc1);
+                        var readVt1 = await SafeReadAsync<VesselTankMappingDocument>(vtmContainer, tankGuid.ToString(), new PartitionKey((double)-999));
+                        if (readVt1 != null) trackedVtm.Add((readVt1.id, -999));
+
+                        bool datesCloseToNow = readVt1 != null 
+                            && readVt1.CreatedDttm.HasValue && Math.Abs((readVt1.CreatedDttm.Value - DateTime.UtcNow).TotalMinutes) < 2
+                            && readVt1.UpdateDttm.HasValue && Math.Abs((readVt1.UpdateDttm.Value - DateTime.UtcNow).TotalMinutes) < 2;
+
+                        bool createVt1Ok = createVtRes1 && readVt1 != null 
+                            && readVt1.Id == tankGuid.ToString()
+                            && readVt1.ProjectId == -999
+                            && readVt1.TankName == "Test Vessel Tank"
+                            && readVt1.Subheader == "Sub 1"
+                            && readVt1.ImoNumber == "9999999"
+                            && readVt1.TankTypeId == 1
+                            && readVt1.VesselType == "PARITY-TEST"
+                            && readVt1.IsActive == true
+                            && readVt1.IsDeleted == false
+                            && readVt1.RequiredInReport == true
+                            && datesCloseToNow;
+                        writeSteps.Add(new { step = "Tank.CreateTank(valid - all columns checked & dates near now)", passed = createVt1Ok, datesCloseToNow });
+                        if (!createVt1Ok) allPassed = false;
+
+                        // 8b. Duplicate Guid across partition -998 -> blocked; nothing appears in partition -998; -999 unchanged
+                        var vtDocDup = new VesselTank
+                        {
+                            Id = tankGuid,
+                            ProjectId = -998,
+                            TankName = "Duplicate Tank",
+                            ImoNumber = "9999999"
+                        };
+                        var createVtDupRes = await cosmosTankRepo.CreateTank(vtDocDup);
+                        var read998 = await SafeReadAsync<VesselTankMappingDocument>(vtmContainer, tankGuid.ToString(), new PartitionKey((double)-998));
+                        var read999Unchanged = await SafeReadAsync<VesselTankMappingDocument>(vtmContainer, tankGuid.ToString(), new PartitionKey((double)-999));
+                        bool dupBlockedOk = !createVtDupRes && read998 == null && read999Unchanged != null && read999Unchanged.TankName == "Test Vessel Tank";
+                        writeSteps.Add(new { step = "Tank.CreateTank(duplicate Guid cross-partition blocked & partition -998 empty)", passed = dupBlockedOk });
+                        if (!dupBlockedOk) allPassed = false;
+
+                        // 8c. C23: Run CreateTanks_VesselByProject("9999999", -999, -998, "9999998") on test data
+                        var testProjDoc = new
+                        {
+                            id = "-999",
+                            ID = -999,
+                            VesselType = "PARITY-TEST",
+                            IMO = 9999999,
+                            Name = "Parity Test Project"
+                        };
+                        try
+                        {
+                            await projectsContainer.CreateItemAsync(testProjDoc, new PartitionKey("-999"));
+                            trackedProjects.Add(("-999", "-999"));
+                        }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+                        {
+                        }
+
+                        var copiedTanks = await cosmosTankRepo.CreateTanks_VesselByProject("9999999", -999, -998, "9999998");
+                        bool copiedListEmpty = copiedTanks != null && copiedTanks.Count == 0;
+
+                        var qCopiedVtm = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -998 AND c.ImoNumber = '9999998'");
+                        using var feedCopiedVtm = vtmContainer.GetItemQueryIterator<VesselTankMappingDocument>(qCopiedVtm, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-998) });
+                        int copiedVtmCount = 0;
+                        while (feedCopiedVtm.HasMoreResults)
+                        {
+                            var resp = await feedCopiedVtm.ReadNextAsync();
+                            foreach (var doc in resp)
+                            {
+                                copiedVtmCount++;
+                                trackedVtm.Add((doc.id, -998));
+                                bool docCopyOk = doc.VesselType == "PARITY-TEST" && doc.TankName == "Test Vessel Tank" && doc.ProjectId == -998;
+                                writeSteps.Add(new { step = $"Tank.CreateTanks_VesselByProject readback ({doc.id})", passed = docCopyOk });
+                                if (!docCopyOk) allPassed = false;
+                            }
+                        }
+                        bool createByProjectOk = copiedListEmpty && copiedVtmCount >= 1;
+                        writeSteps.Add(new { step = "Tank.CreateTanks_VesselByProject(empty list & rows created in -998)", passed = createByProjectOk, copiedListEmpty, copiedVtmCount });
+                        if (!createByProjectOk) allPassed = false;
+
+                        // 8d. C23: Run PopulateTemplate (both overloads) on test data
+                        var templateTankGuid = Guid.NewGuid();
+                        var templateTankDoc = new VesselTankMappingDocument
+                        {
+                            id = templateTankGuid.ToString(),
+                            Id = templateTankGuid.ToString(),
+                            ProjectId = 0,
+                            VesselType = "PARITY-TEST",
+                            TankName = "Template Tank Parity",
+                            ImoNumber = "",
+                            TankTypeId = 1,
+                            IsActive = true,
+                            IsDeleted = false
+                        };
+                        await vtmContainer.CreateItemAsync(templateTankDoc, new PartitionKey((double)0));
+                        trackedVtm.Add((templateTankDoc.id, 0));
+
+                        var pop1Res = await cosmosTankRepo.PopulateTemplate("9999998", "PARITY-TEST", "9999999");
+                        var qPop1 = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -998 AND c.TankName = 'Template Tank Parity'");
+                        using var feedPop1 = vtmContainer.GetItemQueryIterator<VesselTankMappingDocument>(qPop1, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-998) });
+                        int pop1Count = 0;
+                        while (feedPop1.HasMoreResults)
+                        {
+                            var resp = await feedPop1.ReadNextAsync();
+                            foreach (var doc in resp)
+                            {
+                                pop1Count++;
+                                trackedVtm.Add((doc.id, -998));
+                            }
+                        }
+                        bool pop1Ok = pop1Res && pop1Count >= 1;
+                        writeSteps.Add(new { step = "Tank.PopulateTemplate(3 params)", passed = pop1Ok, pop1Count });
+                        if (!pop1Ok) allPassed = false;
+
+                        var pop2Res = await cosmosTankRepo.PopulateTemplate("9999998", "PARITY-TEST", "9999999", -998, -999);
+                        writeSteps.Add(new { step = "Tank.PopulateTemplate(4 params)", passed = pop2Res });
+                        if (!pop2Res) allPassed = false;
+
+                        var qPop2 = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -998 AND c.TankName = 'Template Tank Parity'");
+                        using var feedPop2 = vtmContainer.GetItemQueryIterator<VesselTankMappingDocument>(qPop2, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-998) });
+                        while (feedPop2.HasMoreResults)
+                        {
+                            var resp = await feedPop2.ReadNextAsync();
+                            foreach (var doc in resp)
+                            {
+                                if (!trackedVtm.Any(t => t.id == doc.id && t.partitionKey == -998))
+                                {
+                                    trackedVtm.Add((doc.id, -998));
+                                }
+                            }
+                        }
+
+                        // 9. Update_Vessel_TankMapping (C24: check VesselType, TankTypeId, Subheader, UpdateDttm, IsActive, RequiredInReport, no doc in -998)
+                        var updateVt = new VesselTank
+                        {
+                            Id = tankGuid,
+                            ProjectId = -998,
+                            TankName = "Updated Tank Name",
+                            Subheader = "Sub 2",
+                            ImoNumber = "9999999",
+                            TankTypeId = 2,
+                            VesselType = "PARITY-TEST-UPDATED",
+                            IsActive = true,
+                            RequiredInReport = true,
+                            UpdateDttm = DateTime.UtcNow
+                        };
+                        var updateVtRes = await cosmosTankRepo.UpdateTank(updateVt);
+                        var readVtUpdated = await SafeReadAsync<VesselTankMappingDocument>(vtmContainer, tankGuid.ToString(), new PartitionKey((double)-999));
+                        var readVt998 = await SafeReadAsync<VesselTankMappingDocument>(vtmContainer, tankGuid.ToString(), new PartitionKey((double)-998));
+                        bool updateDttmNearNow = readVtUpdated?.UpdateDttm != null && Math.Abs((readVtUpdated.UpdateDttm.Value - DateTime.UtcNow).TotalMinutes) < 2;
+
+                        bool updateVtOk = updateVtRes && readVtUpdated != null
+                            && readVtUpdated.ProjectId == -999 // ProjectId NOT in SET, unchanged!
+                            && readVtUpdated.CreatedDttm == null // Overwritten with NULL (SQL bug kept)!
+                            && readVtUpdated.TankName == "Updated Tank Name"
+                            && readVtUpdated.VesselType == "PARITY-TEST-UPDATED"
+                            && readVtUpdated.TankTypeId == 2
+                            && readVtUpdated.Subheader == "Sub 2"
+                            && updateDttmNearNow
+                            && readVtUpdated.IsActive == true
+                            && readVtUpdated.RequiredInReport == true
+                            && readVt998 == null;
+                        writeSteps.Add(new { step = "Tank.UpdateTank(all properties, CreatedDttm NULL, no doc in -998)", passed = updateVtOk });
+                        if (!updateVtOk) allPassed = false;
+
+                        // 10. CreateProjectTankImageCard
+                        var card = new TankImageCard
+                        {
+                            ProjectId = -999,
+                            SectionId = Guid.Empty,
+                            CardName = "Parity Card 1",
+                            CardNumber = 1,
+                            DescriptionId = 1,
+                            ImageId = 1
+                        };
+                        var createCardRes = await cosmosTankRepo.CreateProjectTankImageCard(card);
+                        var cardQ = new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -999 AND c.CardName = 'Parity Card 1'");
+                        using var cardFeed = cardContainer.GetItemQueryIterator<TankImageCardDocument>(cardQ, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)-999) });
+                        TankImageCardDocument? cardDoc = null;
+                        if (cardFeed.HasMoreResults)
+                        {
+                            var r = await cardFeed.ReadNextAsync();
+                            cardDoc = r.FirstOrDefault();
+                        }
+                        if (cardDoc != null) trackedCard.Add((cardDoc.id, -999));
+                        bool cardCreateOk = createCardRes && cardDoc != null && cardDoc.CreatedDttm == null && cardDoc.UpdatedDttm == null && cardDoc.SectionId == Guid.Empty.ToString();
+                        writeSteps.Add(new { step = "Tank.CreateProjectTankImageCard", passed = cardCreateOk, docFound = cardDoc != null });
+                        if (!cardCreateOk) allPassed = false;
+
+                        // 11. UpdateProjectTankImageCard (C24: whole doc unchanged, compare _etag before and after)
+                        if (cardDoc != null)
+                        {
+                            var beforeCardResponse = await cardContainer.ReadItemAsync<TankImageCardDocument>(cardDoc.id, new PartitionKey((double)-999));
+                            var beforeEtag = beforeCardResponse.ETag;
+
+                            var updateCard = new TankImageCard
+                            {
+                                Id = cardDoc.Id,
+                                ProjectId = -999,
+                                CardName = "Modified Card Name",
+                                SectionId = Guid.Empty
+                            };
+                            var updateCardRes = await cosmosTankRepo.UpdateProjectTankImageCard(updateCard);
+                            var afterCardResponse = await cardContainer.ReadItemAsync<TankImageCardDocument>(cardDoc.id, new PartitionKey((double)-999));
+                            var afterEtag = afterCardResponse.ETag;
+
+                            bool updateCardBugOk = !updateCardRes && beforeEtag == afterEtag && afterCardResponse.Resource.CardName == "Parity Card 1";
+                            writeSteps.Add(new { step = "Tank.UpdateProjectTankImageCard(returns false, etag unchanged, doc unchanged)", passed = updateCardBugOk });
+                            if (!updateCardBugOk) allPassed = false;
+                        }
+
+                        // 12. UpdateStatus (true, empty list, unknown Guid)
+                        var updateStatusRes = await cosmosTankRepo.UpdateStatus(new List<Guid> { tankGuid }, true);
+                        var readVtStatus = await SafeReadAsync<VesselTankMappingDocument>(vtmContainer, tankGuid.ToString(), new PartitionKey((double)-999));
+                        bool statusOk = updateStatusRes && readVtStatus != null && readVtStatus.IsActive == true;
+                        writeSteps.Add(new { step = "Tank.UpdateStatus(true)", passed = statusOk });
+                        if (!statusOk) allPassed = false;
+
+                        var emptyStatusRes = await cosmosTankRepo.UpdateStatus(new List<Guid>(), true);
+                        bool emptyStatusOk = !emptyStatusRes;
+                        writeSteps.Add(new { step = "Tank.UpdateStatus(empty list -> false)", passed = emptyStatusOk });
+                        if (!emptyStatusOk) allPassed = false;
+
+                        var unknownStatusRes = await cosmosTankRepo.UpdateStatus(new List<Guid> { Guid.NewGuid() }, true);
+                        bool unknownStatusOk = !unknownStatusRes;
+                        writeSteps.Add(new { step = "Tank.UpdateStatus(unknown Guid -> false)", passed = unknownStatusOk });
+                        if (!unknownStatusOk) allPassed = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        allPassed = false;
+                        writeSteps.Add(new { step = "WriteException", passed = false, error = ex.ToString() });
+                    }
+                    finally
+                    {
+                        // C25: Cleanup EXACT tracked IDs only - NO partition sweeping!
+                        foreach (var item in trackedGrading)
+                        {
+                            await TryCleanup($"Grading({item.id},{item.partitionKey})", async () =>
+                            {
+                                try
+                                {
+                                    await gradingContainer.DeleteItemAsync<GradingDocument>(item.id, new PartitionKey(item.partitionKey));
+                                }
+                                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            });
+                        }
+
+                        foreach (var item in trackedVgm)
+                        {
+                            await TryCleanup($"VesselGradingMapping({item.id},{item.partitionKey})", async () =>
+                            {
+                                try
+                                {
+                                    await vgmContainer.DeleteItemAsync<VesselGradingMappingDocument>(item.id, new PartitionKey(item.partitionKey));
+                                }
+                                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            });
+                        }
+
+                        foreach (var item in trackedVtm)
+                        {
+                            await TryCleanup($"VesselTankMapping({item.id},{item.partitionKey})", async () =>
+                            {
+                                try
+                                {
+                                    await vtmContainer.DeleteItemAsync<VesselTankMappingDocument>(item.id, new PartitionKey(item.partitionKey));
+                                }
+                                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            });
+                        }
+
+                        foreach (var item in trackedCard)
+                        {
+                            await TryCleanup($"TankImageCard({item.id},{item.partitionKey})", async () =>
+                            {
+                                try
+                                {
+                                    await cardContainer.DeleteItemAsync<TankImageCardDocument>(item.id, new PartitionKey(item.partitionKey));
+                                }
+                                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            });
+                        }
+
+                        foreach (var id in trackedVtsgm)
+                        {
+                            await TryCleanup($"VesselTypeSectionGradingMapping({id})", async () =>
+                            {
+                                try
+                                {
+                                    await vtsgmContainer.DeleteItemAsync<VesselTypeSectionGradingMappingDocument>(id, new PartitionKey(id));
+                                }
+                                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            });
+                        }
+
+                        foreach (var item in trackedProjects)
+                        {
+                            await TryCleanup($"CAP_Projects({item.id},{item.partitionKey})", async () =>
+                            {
+                                try
+                                {
+                                    await projectsContainer.DeleteItemAsync<object>(item.id, new PartitionKey(item.partitionKey));
+                                }
+                                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            });
+                        }
+                    }
+
+                    if (cleanupErrors.Count > 0)
+                    {
+                        allPassed = false;
+                        writeSteps.Add(new { step = "CleanupErrors", passed = false, errors = cleanupErrors });
+                    }
+                }
+
+                allPassed = allPassed && !hadException && checks.All(c =>
+                {
+                    var prop = c.GetType().GetProperty("equal") ?? c.GetType().GetProperty("match") ?? c.GetType().GetProperty("allMatch");
+                    if (prop != null)
+                    {
+                        var val = prop.GetValue(c);
+                        if (val is bool b) return b;
+                    }
+                    var errProp = c.GetType().GetProperty("error");
+                    if (errProp != null) return false;
+                    return true;
+                });
+
+                return Results.Ok(new
+                {
+                    batch = 7,
+                    allPassed,
+                    checksCount = checks.Count,
+                    checks,
+                    writeSteps
+                });
+            }).AllowAnonymous();
+        }
+
+        private static void MapParityBatch8(WebApplication app)
+        {
+            app.MapGet("/health/parity/batch8", async (
+                string? writeTest,
+                IConfiguration config,
+                IServiceProvider sp) =>
+            {
+                var db = sp.GetRequiredService<ApplicationDbContext>();
+                var conn = db.Database.GetDbConnection();
+                if (conn.State != System.Data.ConnectionState.Open)
+                {
+                    await conn.OpenAsync();
+                }
+
+                var sqlReportPartRepo = sp.GetRequiredService<ReportPartRepository>();
+                var cosmosReportPartRepo = sp.GetRequiredService<CosmosReportPartRepository>();
+                var factory = sp.GetRequiredService<ICosmosContainerFactory>();
+
+                var checks = new List<object>();
+                var writeSteps = new List<object>();
+                bool hadException = false;
+                bool allPassed = true;
+
+                // Load reference data from DB inside try so error fails run
+                var vesselTypes = new List<int>();
+                var projectIds = new List<int>();
+                var partNames = new List<(int VesselTypeId, string PartName)>();
+                var partIds = new List<(int VesselTypeId, int PartId)>();
+                var projectParts = new List<(int ProjectId, int PartId)>();
+                var sections = new List<Guid>();
+                var gradingSectionPairs = new List<(int ProjectId, Guid SectionId)>();
+                var cards = new List<(int ProjectId, int TemplateId, Guid SectionId)>();
+                var tankSections = new List<(int ProjectId, int PartId, int ImoNumber)>();
+                var tankTypePairs = new List<(int ProjectId, int TankTypeId)>();
+                var exportSections = new List<(int PartId, int VesselTypeId)>();
+                var subSectionPairs = new List<(int ProjectId, Guid SectionId)>();
+                var showTrueInputs = new List<(int ProjectId, int PartId)>();
+
+                var sqlNonEmptyCount = new Dictionary<string, int>();
+                void RecordSqlNonEmpty(string key, bool hasItems)
+                {
+                    if (hasItems) sqlNonEmptyCount[key] = sqlNonEmptyCount.GetValueOrDefault(key, 0) + 1;
+                }
+
+                try
+                {
+                    vesselTypes = (await conn.QueryAsync<int>(
+                        "SELECT DISTINCT Id FROM [dbo].[VesselType] WHERE Id IS NOT NULL ORDER BY Id")).ToList();
+                    projectIds = (await conn.QueryAsync<int>(
+                        "SELECT DISTINCT TOP 25 ID FROM [CAP].[Projects] WHERE ID IS NOT NULL AND IsDeleted = 0 ORDER BY ID")).ToList();
+                    partNames = (await conn.QueryAsync<(int VesselTypeId, string PartName)>(
+                        "SELECT DISTINCT VesselTypeId, PartName FROM [Config].[VesselTypePartMapping] WHERE VesselTypeId IS NOT NULL AND PartName IS NOT NULL AND IsDeleted = 0")).ToList();
+                    partIds = (await conn.QueryAsync<(int VesselTypeId, int PartId)>(
+                        "SELECT DISTINCT VesselTypeId, VesselTypePartMappingId as PartId FROM [Config].[VesselTypePartMapping] WHERE VesselTypeId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    projectParts = (await conn.QueryAsync<(int ProjectId, int PartId)>(
+                        "SELECT DISTINCT ProjectId, PartId FROM [Config].[ProjectSectionMapping] WHERE ProjectId IS NOT NULL AND PartId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    sections = (await conn.QueryAsync<Guid>(
+                        "SELECT DISTINCT SectionMappingId FROM [Config].[ProjectSectionMapping] WHERE SectionMappingId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    gradingSectionPairs = (await conn.QueryAsync<(int ProjectId, Guid SectionId)>(
+                        "SELECT DISTINCT ProjectId, SectionMappingId FROM [Config].[ProjectSectionMapping] WHERE ProjectId IS NOT NULL AND SectionMappingId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    cards = (await conn.QueryAsync<(int ProjectId, int TemplateId, Guid SectionId)>(
+                        "SELECT DISTINCT ProjectId, TemplateId, SectionId FROM [dbo].[GenericImageCard] WHERE ProjectId IS NOT NULL AND TemplateId IS NOT NULL AND SectionId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    tankSections = (await conn.QueryAsync<(int ProjectId, int PartId, int ImoNumber)>(
+                        @"SELECT DISTINCT p.ID as ProjectId, psm.PartId, ISNULL(p.IMO, 0) as ImoNumber 
+                          FROM [Config].[ProjectTankSectionMapping] psm 
+                          INNER JOIN [CAP].[Projects] p ON p.ID = psm.ProjectId 
+                          WHERE psm.ProjectId IS NOT NULL AND psm.IsDeleted = 0")).ToList();
+                    tankTypePairs = (await conn.QueryAsync<(int ProjectId, int TankTypeId)>(
+                        "SELECT DISTINCT ProjectId, TankTypeId FROM [Config].[ProjectTankSectionMapping] WHERE ProjectId IS NOT NULL AND TankTypeId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    exportSections = (await conn.QueryAsync<(int PartId, int VesselTypeId)>(
+                        "SELECT DISTINCT VesselTypePartMappingId as PartId, VesselTypeId FROM [Config].[VesselTypePartMapping] WHERE VesselTypeId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    subSectionPairs = (await conn.QueryAsync<(int ProjectId, Guid SectionId)>(
+                        @"SELECT DISTINCT psm.ProjectId, pss.Id as SectionId 
+                          FROM [Config].[ProjectSubSection] pss 
+                          INNER JOIN [Config].[ProjectSectionMapping] psm ON psm.SectionMappingId = pss.ProjectSectionId 
+                          WHERE psm.ProjectId IS NOT NULL AND pss.Id IS NOT NULL AND pss.IsDeleted = 0")).ToList();
+                    showTrueInputs = (await conn.QueryAsync<(int ProjectId, int PartId)>(
+                        "SELECT TOP 5 ProjectId, PartId FROM [Config].[ProjectSectionMapping] WHERE RequiredInReport = 0 AND ProjectId IS NOT NULL AND PartId IS NOT NULL AND IsDeleted = 0")).ToList();
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { check = "SetupReferenceData", error = ex.Message });
+                }
+
+                // 1. GetVesselTypes
+                try
+                {
+                    var sqlVt = await sqlReportPartRepo.GetVesselTypes();
+                    var cosmosVt = await cosmosReportPartRepo.GetVesselTypes();
+                    RecordSqlNonEmpty("GetVesselTypes", sqlVt?.vesselTypes != null && sqlVt.vesselTypes.Count > 0);
+                    if (sqlVt?.vesselTypes == null || cosmosVt?.vesselTypes == null)
+                    {
+                        bool bothNull = sqlVt?.vesselTypes == null && cosmosVt?.vesselTypes == null;
+                        checks.Add(new { check = "ReportPart.GetVesselTypes", sqlNull = sqlVt?.vesselTypes == null, cosmosNull = cosmosVt?.vesselTypes == null, equal = false });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists("ReportPart.GetVesselTypes",
+                            sqlVt.vesselTypes, cosmosVt.vesselTypes,
+                            x => x.VesselTypeId, false,
+                            ("VesselTypeId", x => x.VesselTypeId),
+                            ("VesselType", x => x.VesselType)));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { check = "ReportPart.GetVesselTypes", error = ex.Message });
+                }
+
+                // 2. GetReportPartsByVesselTypeAsync
+                var testVesselTypes = new List<int>(vesselTypes);
+                testVesselTypes.Add(-99999);
+                foreach (var vt in testVesselTypes)
+                {
+                    bool isMissingId = vt == -99999;
+                    try
+                    {
+                        var sqlParts = await sqlReportPartRepo.GetReportPartsByVesselTypeAsync(vt);
+                        var cosmosParts = await cosmosReportPartRepo.GetReportPartsByVesselTypeAsync(vt);
+                        RecordSqlNonEmpty("GetReportPartsByVesselTypeAsync", sqlParts?.reportTemplates != null && sqlParts.reportTemplates.Count > 0);
+                        if (sqlParts?.reportTemplates == null || cosmosParts?.reportTemplates == null)
+                        {
+                            bool bothNull = sqlParts?.reportTemplates == null && cosmosParts?.reportTemplates == null;
+                            checks.Add(new { check = $"ReportPart.GetReportPartsByVesselTypeAsync({vt})", sqlNull = sqlParts?.reportTemplates == null, cosmosNull = cosmosParts?.reportTemplates == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetReportPartsByVesselTypeAsync({vt})",
+                                sqlParts.reportTemplates, cosmosParts.reportTemplates,
+                                null, true,
+                                ("PartId", x => x.PartId),
+                                ("PartName", x => x.PartName),
+                                ("SequenceNo", x => x.SequenceNo),
+                                ("VesselTypeId", x => x.VesselTypeId),
+                                ("IsActive", x => x.IsActive),
+                                ("IsEditable", x => x.IsEditable)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetReportPartsByVesselTypeAsync({vt})", error = ex.Message });
+                    }
+                }
+
+                // 3. GetSectionNamesByPartNameAsync
+                var testPartNames = new List<(int VesselTypeId, string PartName)>(partNames);
+                testPartNames.Add((-99999, "NoSuchPart"));
+                foreach (var (vt, pn) in testPartNames)
+                {
+                    bool isMissingId = vt == -99999 || pn == "NoSuchPart";
+                    try
+                    {
+                        var sqlSec = await sqlReportPartRepo.GetSectionNamesByPartNameAsync(vt, pn);
+                        var cosmosSec = await cosmosReportPartRepo.GetSectionNamesByPartNameAsync(vt, pn);
+                        RecordSqlNonEmpty("GetSectionNamesByPartNameAsync.Normal", sqlSec?.NormalSections != null && sqlSec.NormalSections.Count > 0);
+                        RecordSqlNonEmpty("GetSectionNamesByPartNameAsync.Tanks", sqlSec?.TanksSections != null && sqlSec.TanksSections.Count > 0);
+                        if (sqlSec?.NormalSections == null || cosmosSec?.NormalSections == null)
+                        {
+                            bool bothNull = sqlSec?.NormalSections == null && cosmosSec?.NormalSections == null;
+                            checks.Add(new { check = $"ReportPart.GetSectionNamesByPartNameAsync.Normal({vt}, {pn})", sqlNull = sqlSec?.NormalSections == null, cosmosNull = cosmosSec?.NormalSections == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetSectionNamesByPartNameAsync.Normal({vt}, {pn})",
+                                sqlSec.NormalSections, cosmosSec.NormalSections,
+                                x => x.SectionId, false,
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("SubHeader", x => x.SubHeader),
+                                ("TotalCards", x => x.TotalCards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount),
+                                ("IsActive", x => x.IsActive),
+                                ("PartName", x => x.PartName),
+                                ("PartId", x => x.PartId),
+                                ("VesselTypeId", x => x.VesselTypeId)));
+                        }
+
+                        if (sqlSec?.TanksSections == null || cosmosSec?.TanksSections == null)
+                        {
+                            bool bothNull = sqlSec?.TanksSections == null && cosmosSec?.TanksSections == null;
+                            checks.Add(new { check = $"ReportPart.GetSectionNamesByPartNameAsync.Tanks({vt}, {pn})", sqlNull = sqlSec?.TanksSections == null, cosmosNull = cosmosSec?.TanksSections == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetSectionNamesByPartNameAsync.Tanks({vt}, {pn})",
+                                sqlSec.TanksSections, cosmosSec.TanksSections,
+                                x => x.TankTypeId, false,
+                                ("TankTypeId", x => x.TankTypeId),
+                                ("TankType", x => x.TankType),
+                                ("TotalCards", x => x.TotalCards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount),
+                                ("IsActive", x => x.IsActive),
+                                ("IsMapped", x => x.IsMapped),
+                                ("PartName", x => x.PartName),
+                                ("PartId", x => x.PartId),
+                                ("VesselTypeId", x => x.VesselTypeId)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetSectionNamesByPartNameAsync({vt}, {pn})", error = ex.Message });
+                    }
+                }
+
+                // 4. GetSectionNamesByPartId
+                var testPartIds = new List<(int VesselTypeId, int PartId)>(partIds);
+                testPartIds.Add((-99999, -99999));
+                foreach (var (vt, pid) in testPartIds)
+                {
+                    bool isMissingId = vt == -99999 || pid == -99999;
+                    try
+                    {
+                        var sqlSec = await sqlReportPartRepo.GetSectionNamesByPartId(vt, pid);
+                        var cosmosSec = await cosmosReportPartRepo.GetSectionNamesByPartId(vt, pid);
+                        RecordSqlNonEmpty("GetSectionNamesByPartId.Normal", sqlSec?.NormalSections != null && sqlSec.NormalSections.Count > 0);
+                        RecordSqlNonEmpty("GetSectionNamesByPartId.Sub", sqlSec?.SubSections != null && sqlSec.SubSections.Count > 0);
+                        RecordSqlNonEmpty("GetSectionNamesByPartId.Tanks", sqlSec?.TanksSections != null && sqlSec.TanksSections.Count > 0);
+                        if (sqlSec?.NormalSections == null || cosmosSec?.NormalSections == null)
+                        {
+                            bool bothNull = sqlSec?.NormalSections == null && cosmosSec?.NormalSections == null;
+                            checks.Add(new { check = $"ReportPart.GetSectionNamesByPartId.Normal({vt}, {pid})", sqlNull = sqlSec?.NormalSections == null, cosmosNull = cosmosSec?.NormalSections == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetSectionNamesByPartId.Normal({vt}, {pid})",
+                                sqlSec.NormalSections, cosmosSec.NormalSections,
+                                null, true,
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("SubHeader", x => x.SubHeader),
+                                ("TotalCards", x => x.TotalCards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount),
+                                ("IsActive", x => x.IsActive),
+                                ("PartName", x => x.PartName),
+                                ("PartId", x => x.PartId),
+                                ("VesselTypeId", x => x.VesselTypeId)));
+                        }
+
+                        if (sqlSec?.SubSections == null || cosmosSec?.SubSections == null)
+                        {
+                            bool bothNull = sqlSec?.SubSections == null && cosmosSec?.SubSections == null;
+                            checks.Add(new { check = $"ReportPart.GetSectionNamesByPartId.Sub({vt}, {pid})", sqlNull = sqlSec?.SubSections == null, cosmosNull = cosmosSec?.SubSections == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetSectionNamesByPartId.Sub({vt}, {pid})",
+                                sqlSec.SubSections, cosmosSec.SubSections,
+                                null, true,
+                                ("SubSectionId", x => x.SubSectionId),
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("TotalCards", x => x.TotalCards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount),
+                                ("IsActive", x => x.IsActive),
+                                ("PartName", x => x.PartName),
+                                ("PartId", x => x.PartId),
+                                ("VesselTypeId", x => x.VesselTypeId)));
+                        }
+
+                        if (sqlSec?.TanksSections == null || cosmosSec?.TanksSections == null)
+                        {
+                            bool bothNull = sqlSec?.TanksSections == null && cosmosSec?.TanksSections == null;
+                            checks.Add(new { check = $"ReportPart.GetSectionNamesByPartId.Tanks({vt}, {pid})", sqlNull = sqlSec?.TanksSections == null, cosmosNull = cosmosSec?.TanksSections == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetSectionNamesByPartId.Tanks({vt}, {pid})",
+                                sqlSec.TanksSections, cosmosSec.TanksSections,
+                                x => x.TankTypeId, false,
+                                ("TankTypeId", x => x.TankTypeId),
+                                ("TankType", x => x.TankType),
+                                ("TotalCards", x => x.TotalCards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount),
+                                ("IsActive", x => x.IsActive),
+                                ("IsMapped", x => x.IsMapped),
+                                ("PartName", x => x.PartName),
+                                ("PartId", x => x.PartId),
+                                ("VesselTypeId", x => x.VesselTypeId)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetSectionNamesByPartId({vt}, {pid})", error = ex.Message });
+                    }
+                }
+
+                // 5. GetGradingCondition
+                try
+                {
+                    var sqlGc = await sqlReportPartRepo.GetGradingCondition();
+                    var cosmosGc = await cosmosReportPartRepo.GetGradingCondition();
+                    RecordSqlNonEmpty("GetGradingCondition", sqlGc != null && sqlGc.Count > 0);
+                    if (sqlGc == null || cosmosGc == null)
+                    {
+                        checks.Add(new { check = "ReportPart.GetGradingCondition", sqlNull = sqlGc == null, cosmosNull = cosmosGc == null, equal = false });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists("ReportPart.GetGradingCondition",
+                            sqlGc, cosmosGc,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("Name", x => x.Name)));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { check = "ReportPart.GetGradingCondition", error = ex.Message });
+                }
+
+                // 6. GetNormalSectionByProjectId
+                var testProjectParts = new List<(int ProjectId, int PartId)>(projectParts);
+                testProjectParts.Add((-99999, -99999));
+                foreach (var (projId, partId) in testProjectParts)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlNs = await sqlReportPartRepo.GetNormalSectionByProjectId(projId, partId);
+                        var cosmosNs = await cosmosReportPartRepo.GetNormalSectionByProjectId(projId, partId);
+                        RecordSqlNonEmpty("GetNormalSectionByProjectId", sqlNs != null && sqlNs.Count > 0);
+                        if (sqlNs == null || cosmosNs == null)
+                        {
+                            bool bothNull = sqlNs == null && cosmosNs == null;
+                            checks.Add(new { check = $"ReportPart.GetNormalSectionByProjectId({projId}, {partId})", sqlNull = sqlNs == null, cosmosNull = cosmosNs == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetNormalSectionByProjectId({projId}, {partId})",
+                                sqlNs, cosmosNs,
+                                null, true,
+                                ("SectionMappingId", x => x.SectionMappingId),
+                                ("SectionName", x => x.SectionName),
+                                ("SubHeader", x => x.SubHeader),
+                                ("Order", x => x.Order),
+                                ("HasSubsection", x => x.HasSubsection),
+                                ("Totalcards", x => x.Totalcards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetNormalSectionByProjectId({projId}, {partId})", error = ex.Message });
+                    }
+                }
+
+                // 7. GetProjectSubsectionBySectionId
+                var testSections = new List<Guid>(sections);
+                testSections.Add(Guid.NewGuid());
+                foreach (var secId in testSections)
+                {
+                    bool isMissingId = !sections.Contains(secId);
+                    try
+                    {
+                        var sqlSub = await sqlReportPartRepo.GetProjectSubsectionBySectionId(secId);
+                        var cosmosSub = await cosmosReportPartRepo.GetProjectSubsectionBySectionId(secId);
+                        RecordSqlNonEmpty("GetProjectSubsectionBySectionId", sqlSub != null && sqlSub.Count > 0);
+                        if (sqlSub == null || cosmosSub == null)
+                        {
+                            bool bothNull = sqlSub == null && cosmosSub == null;
+                            checks.Add(new { check = $"ReportPart.GetProjectSubsectionBySectionId({secId})", sqlNull = sqlSub == null, cosmosNull = cosmosSub == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetProjectSubsectionBySectionId({secId})",
+                                sqlSub, cosmosSub,
+                                null, true,
+                                ("SectionMappingId", x => x.SectionMappingId),
+                                ("Id", x => x.Id),
+                                ("SectionName", x => x.SectionName),
+                                ("Order", x => x.Order),
+                                ("Totalcards", x => x.Totalcards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount),
+                                ("IsSubSection", x => x.IsSubSection)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetProjectSubsectionBySectionId({secId})", error = ex.Message });
+                    }
+                }
+
+                // 8. GetGradingConditionByProjectId
+                var testProjectIds = new List<int>(projectIds);
+                testProjectIds.Add(-99999);
+                foreach (var projId in testProjectIds)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlGc = await sqlReportPartRepo.GetGradingConditionByProjectId(projId);
+                        var cosmosGc = await cosmosReportPartRepo.GetGradingConditionByProjectId(projId);
+                        RecordSqlNonEmpty("GetGradingConditionByProjectId", sqlGc != null && sqlGc.Count > 0);
+                        if (sqlGc == null || cosmosGc == null)
+                        {
+                            bool bothNull = sqlGc == null && cosmosGc == null;
+                            checks.Add(new { check = $"ReportPart.GetGradingConditionByProjectId({projId})", sqlNull = sqlGc == null, cosmosNull = cosmosGc == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetGradingConditionByProjectId({projId})",
+                                sqlGc, cosmosGc,
+                                x => x.Id, false,
+                                ("Id", x => x.Id),
+                                ("Name", x => x.Name),
+                                ("Value", x => x.Value),
+                                ("SectionId", x => x.SectionId),
+                                ("GradingId", x => x.GradingId)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetGradingConditionByProjectId({projId})", error = ex.Message });
+                    }
+                }
+
+                // 9. GetGradingBySectionId
+                var testGradingSectionPairs = new List<(int ProjectId, Guid SectionId)>(gradingSectionPairs);
+                testGradingSectionPairs.Add((-99999, Guid.NewGuid()));
+                foreach (var (projId, secId) in testGradingSectionPairs)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlG = await sqlReportPartRepo.GetGradingBySectionId(projId, secId);
+                        var cosmosG = await cosmosReportPartRepo.GetGradingBySectionId(projId, secId);
+                        RecordSqlNonEmpty("GetGradingBySectionId", sqlG != null && sqlG.Count > 0);
+                        if (sqlG == null || cosmosG == null)
+                        {
+                            bool bothNull = sqlG == null && cosmosG == null;
+                            checks.Add(new { check = $"ReportPart.GetGradingBySectionId({projId}, {secId})", sqlNull = sqlG == null, cosmosNull = cosmosG == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetGradingBySectionId({projId}, {secId})",
+                                sqlG, cosmosG,
+                                null, true,
+                                ("Id", x => x.Id),
+                                ("Name", x => x.Name),
+                                ("GradingConditionGroupId", x => x.GradingConditionGroupId),
+                                ("RequiredInReport", x => x.RequiredInReport)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetGradingBySectionId({projId}, {secId})", error = ex.Message });
+                    }
+                }
+
+                // 10. GetImageDescriptionsBySectionId
+                foreach (var (projId, secId) in testGradingSectionPairs)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlDesc = await sqlReportPartRepo.GetImageDescriptionsBySectionId(projId, secId);
+                        var cosmosDesc = await cosmosReportPartRepo.GetImageDescriptionsBySectionId(projId, secId);
+                        RecordSqlNonEmpty("GetImageDescriptionsBySectionId", sqlDesc != null && sqlDesc.Count > 0);
+                        if (sqlDesc == null || cosmosDesc == null)
+                        {
+                            bool bothNull = sqlDesc == null && cosmosDesc == null;
+                            checks.Add(new { check = $"ReportPart.GetImageDescriptionsBySectionId({projId}, {secId})", sqlNull = sqlDesc == null, cosmosNull = cosmosDesc == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetImageDescriptionsBySectionId({projId}, {secId})",
+                                sqlDesc, cosmosDesc,
+                                x => x.Id, false,
+                                ("Id", x => x.Id),
+                                ("Description", x => x.Description)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetImageDescriptionsBySectionId({projId}, {secId})", error = ex.Message });
+                    }
+                }
+
+                // 11. GetImageDescriptionsBySubSectionId (T9: real subsection ids)
+                var testSubSectionPairs = new List<(int ProjectId, Guid SectionId)>(subSectionPairs);
+                testSubSectionPairs.Add((-99999, Guid.NewGuid()));
+                foreach (var (projId, secId) in testSubSectionPairs)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlDesc = await sqlReportPartRepo.GetImageDescriptionsBySubSectionId(projId, secId);
+                        var cosmosDesc = await cosmosReportPartRepo.GetImageDescriptionsBySubSectionId(projId, secId);
+                        RecordSqlNonEmpty("GetImageDescriptionsBySubSectionId", sqlDesc != null && sqlDesc.Count > 0);
+                        if (sqlDesc == null || cosmosDesc == null)
+                        {
+                            bool bothNull = sqlDesc == null && cosmosDesc == null;
+                            checks.Add(new { check = $"ReportPart.GetImageDescriptionsBySubSectionId({projId}, {secId})", sqlNull = sqlDesc == null, cosmosNull = cosmosDesc == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetImageDescriptionsBySubSectionId({projId}, {secId})",
+                                sqlDesc, cosmosDesc,
+                                x => x.Id, false,
+                                ("Id", x => x.Id),
+                                ("Description", x => x.Description)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetImageDescriptionsBySubSectionId({projId}, {secId})", error = ex.Message });
+                    }
+                }
+
+                // 12. GetGenericImageCard
+                var testCards = new List<(int ProjectId, int TemplateId, Guid SectionId)>(cards);
+                testCards.Add((-99999, -99999, Guid.NewGuid()));
+                foreach (var (projId, tmplId, secId) in testCards)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlCards = await sqlReportPartRepo.GetGenericImageCard(projId, tmplId, secId);
+                        var cosmosCards = await cosmosReportPartRepo.GetGenericImageCard(projId, tmplId, secId);
+                        RecordSqlNonEmpty("GetGenericImageCard", sqlCards != null && sqlCards.Count > 0);
+                        if (sqlCards == null || cosmosCards == null)
+                        {
+                            bool bothNull = sqlCards == null && cosmosCards == null;
+                            checks.Add(new { check = $"ReportPart.GetGenericImageCard({projId}, {tmplId}, {secId})", sqlNull = sqlCards == null, cosmosNull = cosmosCards == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetGenericImageCard({projId}, {tmplId}, {secId})",
+                                sqlCards, cosmosCards,
+                                x => x.Id, false,
+                                ("Id", x => x.Id),
+                                ("CardName", x => x.CardName),
+                                ("CardNumber", x => x.CardNumber),
+                                ("DescriptionId", x => x.DescriptionId),
+                                ("AdditionalDescription", x => x.AdditionalDescription),
+                                ("CurrentCondition", x => x.CurrentCondition),
+                                ("IsActive", x => x.IsActive),
+                                ("ImageId", x => x.ImageId),
+                                ("src", x => x.src)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetGenericImageCard({projId}, {tmplId}, {secId})", error = ex.Message });
+                    }
+                }
+
+                // 13. GetTankSectionByProjectId
+                var testTankSections = new List<(int ProjectId, int PartId, int ImoNumber)>(tankSections);
+                testTankSections.Add((-99999, -99999, 0));
+                foreach (var (projId, partId, imo) in testTankSections)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlT = await sqlReportPartRepo.GetTankSectionByProjectId(projId, partId, imo);
+                        var cosmosT = await cosmosReportPartRepo.GetTankSectionByProjectId(projId, partId, imo);
+                        RecordSqlNonEmpty("GetTankSectionByProjectId", sqlT != null && sqlT.Count > 0);
+                        if (sqlT == null || cosmosT == null)
+                        {
+                            bool bothNull = sqlT == null && cosmosT == null;
+                            checks.Add(new { check = $"ReportPart.GetTankSectionByProjectId({projId}, {partId}, {imo})", sqlNull = sqlT == null, cosmosNull = cosmosT == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetTankSectionByProjectId({projId}, {partId}, {imo})",
+                                sqlT, cosmosT,
+                                null, true,
+                                ("TankTypeId", x => x.TankTypeId),
+                                ("TankName", x => x.TankName),
+                                ("Id", x => x.Id),
+                                ("OrderNumber", x => x.OrderNumber),
+                                ("SectionMappingId", x => x.SectionMappingId),
+                                ("Subheader", x => x.Subheader),
+                                ("Totalcards", x => x.Totalcards),
+                                ("PlaceholderCount", x => x.PlaceholderCount),
+                                ("FileNameCount", x => x.FileNameCount)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetTankSectionByProjectId({projId}, {partId}, {imo})", error = ex.Message });
+                    }
+                }
+
+                // 14. GetH_IGrading(false) and (true)
+                try
+                {
+                    var sqlHI0 = await sqlReportPartRepo.GetH_IGrading(false);
+                    var cosmosHI0 = await cosmosReportPartRepo.GetH_IGrading(false);
+                    RecordSqlNonEmpty("GetH_IGrading.false", sqlHI0 != null && sqlHI0.Count > 0);
+                    if (sqlHI0 == null || cosmosHI0 == null)
+                    {
+                        checks.Add(new { check = "ReportPart.GetH_IGrading(false)", sqlNull = sqlHI0 == null, cosmosNull = cosmosHI0 == null, equal = false });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists("ReportPart.GetH_IGrading(false)",
+                            sqlHI0, cosmosHI0,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("Name", x => x.Name),
+                            ("Value", x => x.Value)));
+                    }
+
+                    var sqlHI1 = await sqlReportPartRepo.GetH_IGrading(true);
+                    var cosmosHI1 = await cosmosReportPartRepo.GetH_IGrading(true);
+                    RecordSqlNonEmpty("GetH_IGrading.true", sqlHI1 != null && sqlHI1.Count > 0);
+                    if (sqlHI1 == null || cosmosHI1 == null)
+                    {
+                        checks.Add(new { check = "ReportPart.GetH_IGrading(true)", sqlNull = sqlHI1 == null, cosmosNull = cosmosHI1 == null, equal = false });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists("ReportPart.GetH_IGrading(true)",
+                            sqlHI1, cosmosHI1,
+                            x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("Name", x => x.Name),
+                            ("Value", x => x.Value)));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    allPassed = false;
+                    checks.Add(new { check = "ReportPart.GetH_IGrading", error = ex.Message });
+                }
+
+                // 15. GetImageDescriptionsByTankTypeId
+                var testTankTypePairs = new List<(int ProjectId, int TankTypeId)>(tankTypePairs);
+                testTankTypePairs.Add((-99999, -99999));
+                foreach (var (projId, ttId) in testTankTypePairs)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlDesc = await sqlReportPartRepo.GetImageDescriptionsByTankTypeId(projId, ttId);
+                        var cosmosDesc = await cosmosReportPartRepo.GetImageDescriptionsByTankTypeId(projId, ttId);
+                        RecordSqlNonEmpty("GetImageDescriptionsByTankTypeId", sqlDesc != null && sqlDesc.Count > 0);
+                        if (sqlDesc == null || cosmosDesc == null)
+                        {
+                            bool bothNull = sqlDesc == null && cosmosDesc == null;
+                            checks.Add(new { check = $"ReportPart.GetImageDescriptionsByTankTypeId({projId}, {ttId})", sqlNull = sqlDesc == null, cosmosNull = cosmosDesc == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetImageDescriptionsByTankTypeId({projId}, {ttId})",
+                                sqlDesc, cosmosDesc,
+                                null, true,
+                                ("Id", x => x.Id),
+                                ("Description", x => x.Description),
+                                ("value", x => x.value),
+                                ("TankTypeId", x => x.TankTypeId)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetImageDescriptionsByTankTypeId({projId}, {ttId})", error = ex.Message });
+                    }
+                }
+
+                // 16. GetHandIGradingConditionByProjectId
+                foreach (var projId in testProjectIds)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlHi = await sqlReportPartRepo.GetHandIGradingConditionByProjectId(projId);
+                        var cosmosHi = await cosmosReportPartRepo.GetHandIGradingConditionByProjectId(projId);
+                        RecordSqlNonEmpty("GetHandIGradingConditionByProjectId", sqlHi != null && sqlHi.Count > 0);
+                        if (sqlHi == null || cosmosHi == null)
+                        {
+                            bool bothNull = sqlHi == null && cosmosHi == null;
+                            checks.Add(new { check = $"ReportPart.GetHandIGradingConditionByProjectId({projId})", sqlNull = sqlHi == null, cosmosNull = cosmosHi == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetHandIGradingConditionByProjectId({projId})",
+                                sqlHi, cosmosHi,
+                                x => x.Id, false,
+                                ("Id", x => x.Id),
+                                ("ProjectId", x => x.ProjectId),
+                                ("TemplateId", x => x.TemplateId),
+                                ("SectionId", x => x.SectionId),
+                                ("GradingId", x => x.GradingId),
+                                ("GradingConditionLabel", x => x.GradingConditionLabel),
+                                ("GradingConditionValue", x => x.GradingConditionValue)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetHandIGradingConditionByProjectId({projId})", error = ex.Message });
+                    }
+                }
+
+                // 17. GetH_IProjectGradingByProjectId
+                foreach (var projId in testProjectIds)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlPg = await sqlReportPartRepo.GetH_IProjectGradingByProjectId(projId);
+                        var cosmosPg = await cosmosReportPartRepo.GetH_IProjectGradingByProjectId(projId);
+                        RecordSqlNonEmpty("GetH_IProjectGradingByProjectId", sqlPg != null && sqlPg.Count > 0);
+                        if (sqlPg == null || cosmosPg == null)
+                        {
+                            bool bothNull = sqlPg == null && cosmosPg == null;
+                            checks.Add(new { check = $"ReportPart.GetH_IProjectGradingByProjectId({projId})", sqlNull = sqlPg == null, cosmosNull = cosmosPg == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetH_IProjectGradingByProjectId({projId})",
+                                sqlPg, cosmosPg,
+                                x => x.Id, false,
+                                ("Id", x => x.Id),
+                                ("ProjectId", x => x.ProjectId),
+                                ("TemplateId", x => x.TemplateId),
+                                ("SectionId", x => x.SectionId),
+                                ("GradingId", x => x.GradingId),
+                                ("Value", x => x.Value)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetH_IProjectGradingByProjectId({projId})", error = ex.Message });
+                    }
+                }
+
+                // 18. GetProjectTemplateTitle (partId, projId) (T9)
+                var testTitleParts = new List<(int PartId, int ProjectId)>();
+                if (projectIds.Count == 0)
+                {
+                    allPassed = false;
+                    checks.Add(new { check = "ReportPart.GetProjectTemplateTitle", error = "projectIds is empty" });
+                }
+                else
+                {
+                    if (projectParts.Count > 0)
+                    {
+                        foreach (var pp in projectParts.Take(5))
+                        {
+                            testTitleParts.Add((pp.PartId, pp.ProjectId));
+                        }
+                    }
+                    testTitleParts.Add((-99999, projectIds[0]));
+                }
+                foreach (var (partId, projId) in testTitleParts)
+                {
+                    bool isMissingId = partId == -99999;
+                    try
+                    {
+                        var sqlT = await sqlReportPartRepo.GetProjectTemplateTitle(partId, projId);
+                        var cosmosT = await cosmosReportPartRepo.GetProjectTemplateTitle(partId, projId);
+                        RecordSqlNonEmpty("GetProjectTemplateTitle", sqlT != null && !string.IsNullOrEmpty(sqlT.PartName));
+                        bool bothNull = sqlT == null && cosmosT == null;
+                        if (bothNull && !isMissingId)
+                        {
+                            allPassed = false;
+                            checks.Add(new { check = $"ReportPart.GetProjectTemplateTitle({partId}, {projId})", sqlNull = true, cosmosNull = true, equal = false });
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Single($"ReportPart.GetProjectTemplateTitle({partId}, {projId})",
+                                sqlT, cosmosT,
+                                ("PartId", x => x?.PartId),
+                                ("PartName", x => x?.PartName),
+                                ("SequenceNo", x => x?.SequenceNo)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetProjectTemplateTitle({partId}, {projId})", error = ex.Message });
+                    }
+                }
+
+                // 19. GetVesselTypeExportPartConfiguration
+                foreach (var vt in testVesselTypes)
+                {
+                    bool isMissingId = vt == -99999;
+                    try
+                    {
+                        var sqlEp = await sqlReportPartRepo.GetVesselTypeExportPartConfiguration(vt);
+                        var cosmosEp = await cosmosReportPartRepo.GetVesselTypeExportPartConfiguration(vt);
+                        RecordSqlNonEmpty("GetVesselTypeExportPartConfiguration", sqlEp != null && sqlEp.Count > 0);
+                        if (sqlEp == null || cosmosEp == null)
+                        {
+                            bool bothNull = sqlEp == null && cosmosEp == null;
+                            checks.Add(new { check = $"ReportPart.GetVesselTypeExportPartConfiguration({vt})", sqlNull = sqlEp == null, cosmosNull = cosmosEp == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetVesselTypeExportPartConfiguration({vt})",
+                                sqlEp, cosmosEp,
+                                null, true,
+                                ("PartId", x => x.PartId),
+                                ("PartName", x => x.PartName),
+                                ("RequiredInReport", x => x.RequiredInReport)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetVesselTypeExportPartConfiguration({vt})", error = ex.Message });
+                    }
+                }
+
+                // 20. GetVesselTypeExportSectionConfiguration
+                var testExportSections = new List<(int PartId, int VesselTypeId)>(exportSections);
+                testExportSections.Add((-99999, -99999));
+                foreach (var (partId, vt) in testExportSections)
+                {
+                    bool isMissingId = vt == -99999;
+                    try
+                    {
+                        var sqlEs = await sqlReportPartRepo.GetVesselTypeExportSectionConfiguration(partId, vt);
+                        var cosmosEs = await cosmosReportPartRepo.GetVesselTypeExportSectionConfiguration(partId, vt);
+                        RecordSqlNonEmpty("GetVesselTypeExportSectionConfiguration", sqlEs != null && sqlEs.Count > 0);
+                        if (sqlEs == null || cosmosEs == null)
+                        {
+                            bool bothNull = sqlEs == null && cosmosEs == null;
+                            checks.Add(new { check = $"ReportPart.GetVesselTypeExportSectionConfiguration({partId}, {vt})", sqlNull = sqlEs == null, cosmosNull = cosmosEs == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetVesselTypeExportSectionConfiguration({partId}, {vt})",
+                                sqlEs, cosmosEs,
+                                null, true,
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("TankTypeId", x => x.TankTypeId),
+                                ("TankType", x => x.TankType),
+                                ("IsSubSection", x => x.IsSubSection),
+                                ("ParentId", x => x.ParentId),
+                                ("RequiredInReport", x => x.RequiredInReport)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetVesselTypeExportSectionConfiguration({partId}, {vt})", error = ex.Message });
+                    }
+                }
+
+                // 21. GetProjectExportPartConfiguration
+                foreach (var projId in testProjectIds)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlPep = await sqlReportPartRepo.GetProjectExportPartConfiguration(projId);
+                        var cosmosPep = await cosmosReportPartRepo.GetProjectExportPartConfiguration(projId);
+                        RecordSqlNonEmpty("GetProjectExportPartConfiguration", sqlPep != null && sqlPep.Count > 0);
+                        if (sqlPep == null || cosmosPep == null)
+                        {
+                            bool bothNull = sqlPep == null && cosmosPep == null;
+                            checks.Add(new { check = $"ReportPart.GetProjectExportPartConfiguration({projId})", sqlNull = sqlPep == null, cosmosNull = cosmosPep == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetProjectExportPartConfiguration({projId})",
+                                sqlPep, cosmosPep,
+                                null, true,
+                                ("PartId", x => x.PartId),
+                                ("PartName", x => x.PartName),
+                                ("RequiredInReport", x => x.RequiredInReport)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetProjectExportPartConfiguration({projId})", error = ex.Message });
+                    }
+                }
+
+                // 22. GetProjectExportSectionConfiguration
+                foreach (var (projId, partId) in testProjectParts)
+                {
+                    bool isMissingId = projId == -99999;
+                    try
+                    {
+                        var sqlPes = await sqlReportPartRepo.GetProjectExportSectionConfiguration(partId, projId);
+                        var cosmosPes = await cosmosReportPartRepo.GetProjectExportSectionConfiguration(partId, projId);
+                        RecordSqlNonEmpty("GetProjectExportSectionConfiguration", sqlPes != null && sqlPes.Count > 0);
+                        if (sqlPes == null || cosmosPes == null)
+                        {
+                            bool bothNull = sqlPes == null && cosmosPes == null;
+                            checks.Add(new { check = $"ReportPart.GetProjectExportSectionConfiguration({partId}, {projId})", sqlNull = sqlPes == null, cosmosNull = cosmosPes == null, equal = bothNull && isMissingId });
+                            if (!bothNull || !isMissingId) allPassed = false;
+                        }
+                        else
+                        {
+                            checks.Add(ParityCompare.Lists($"ReportPart.GetProjectExportSectionConfiguration({partId}, {projId})",
+                                sqlPes, cosmosPes,
+                                null, true,
+                                ("SectionId", x => x.SectionId),
+                                ("SectionName", x => x.SectionName),
+                                ("TankTypeId", x => x.TankTypeId),
+                                ("TankType", x => x.TankType),
+                                ("IsSubSection", x => x.IsSubSection),
+                                ("ParentId", x => x.ParentId),
+                                ("RequiredInReport", x => x.RequiredInReport)));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.GetProjectExportSectionConfiguration({partId}, {projId})", error = ex.Message });
+                    }
+                }
+
+                // 23. CheckToShowSectionExportConfig (Y4: fail unless SQL returns true for at least one input)
+                var testShowConfigs = new List<(int ProjectId, int PartId, int ImoNumber)>(tankSections);
+                foreach (var sti in showTrueInputs)
+                {
+                    testShowConfigs.Add((sti.ProjectId, sti.PartId, 0));
+                }
+                if (projectParts.Count > 0)
+                {
+                    testShowConfigs.Add((projectParts[0].ProjectId, projectParts[0].PartId, 0));
+                }
+                testShowConfigs.Add((-99999, -99999, 0));
+                testShowConfigs.Add((-99999, -99999, -99999));
+                bool anySqlShowTrue = false;
+                foreach (var (projId, partId, imo) in testShowConfigs)
+                {
+                    try
+                    {
+                        var sqlShow = await sqlReportPartRepo.CheckToShowSectionExportConfig(projId, imo, partId);
+                        var cosmosShow = await cosmosReportPartRepo.CheckToShowSectionExportConfig(projId, imo, partId);
+                        if (sqlShow) anySqlShowTrue = true;
+                        checks.Add(new { check = $"ReportPart.CheckToShowSectionExportConfig({projId}, {imo}, {partId})", sql = sqlShow, cosmos = cosmosShow, equal = sqlShow == cosmosShow });
+                        if (sqlShow != cosmosShow) allPassed = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { check = $"ReportPart.CheckToShowSectionExportConfig({projId}, {imo}, {partId})", error = ex.Message });
+                    }
+                }
+                if (!anySqlShowTrue)
+                {
+                    allPassed = false;
+                    checks.Add(new { check = "ReportPart.CheckToShowSectionExportConfig.AtLeastOneTrue", passed = false, error = "SQL never returned true for CheckToShowSectionExportConfig" });
+                }
+
+                // T1: Check that every expected method had at least 1 non-empty SQL result across the run
+                var expectedMethods = new[]
+                {
+                    "GetVesselTypes", "GetReportPartsByVesselTypeAsync", "GetSectionNamesByPartNameAsync.Normal",
+                    "GetSectionNamesByPartNameAsync.Tanks", "GetSectionNamesByPartId.Normal", "GetSectionNamesByPartId.Sub",
+                    "GetSectionNamesByPartId.Tanks", "GetGradingCondition", "GetNormalSectionByProjectId",
+                    "GetProjectSubsectionBySectionId", "GetGradingConditionByProjectId", "GetGradingBySectionId",
+                    "GetImageDescriptionsBySectionId", "GetImageDescriptionsBySubSectionId", "GetGenericImageCard",
+                    "GetTankSectionByProjectId", "GetH_IGrading.false", "GetH_IGrading.true", "GetImageDescriptionsByTankTypeId",
+                    "GetHandIGradingConditionByProjectId", "GetH_IProjectGradingByProjectId", "GetProjectTemplateTitle",
+                    "GetVesselTypeExportPartConfiguration", "GetVesselTypeExportSectionConfiguration",
+                    "GetProjectExportPartConfiguration", "GetProjectExportSectionConfiguration"
+                };
+                foreach (var em in expectedMethods)
+                {
+                    int c = sqlNonEmptyCount.GetValueOrDefault(em, 0);
+                    if (c == 0)
+                    {
+                        allPassed = false;
+                        checks.Add(new { check = $"SqlHasNonEmptyResults.{em}", passed = false, error = $"Method {em} had 0 non-empty SQL results across the run" });
+                    }
+                }
+
+                // Write tests (&writeTest=yes)
+                if (string.Equals(writeTest, "yes", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rpContainer = factory.GetContainer(CosmosContainers.Config_ReportPart);
+                    var psmContainer = factory.GetContainer(CosmosContainers.Config_ProjectSectionMapping);
+                    var ptsContainer = factory.GetContainer(CosmosContainers.Config_ProjectTankSectionMapping);
+                    var psubContainer = factory.GetContainer(CosmosContainers.Config_ProjectSubSection);
+                    var psdContainer = factory.GetContainer(CosmosContainers.Config_ProjectSectionDescriptionMapping);
+                    var psdSubContainer = factory.GetContainer(CosmosContainers.Config_ProjectSubSectionDescriptionMapping);
+                    var psgContainer = factory.GetContainer(CosmosContainers.Config_ProjectSectionGradingMapping);
+
+                    var vtpContainer = factory.GetContainer(CosmosContainers.Config_VesselTypePartMapping);
+                    var vnsContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeNormalSectionMapping);
+                    var vtsContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeTankSectionMapping);
+                    var vsubContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeSubSection);
+                    var vsdContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeSectionDescriptionMapping);
+                    var vsubDescContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeSubSectionDescriptionMapping);
+                    var vsgContainer = factory.GetContainer(CosmosContainers.Config_VesselTypeSectionGradingMapping);
+
+                    var trackedRp = new List<(string id, double partitionKey)>();
+                    var trackedPsm = new List<(string id, double partitionKey)>();
+                    var trackedPts = new List<(string id, double partitionKey)>();
+                    var trackedPsub = new List<string>();
+                    var trackedPsd = new List<string>();
+                    var trackedPsdSub = new List<string>();
+                    var trackedPsg = new List<string>();
+
+                    var trackedVtp = new List<(string id, double partitionKey)>();
+                    var trackedVns = new List<(string id, double partitionKey)>();
+                    var trackedVts = new List<(string id, double partitionKey)>();
+                    var trackedVsub = new List<string>();
+                    var trackedVsubDesc = new List<string>();
+                    var trackedVsd = new List<string>();
+                    var trackedVsg = new List<string>();
+
+                    var cleanupErrors = new List<string>();
+                    async Task TryCleanup(string name, Func<Task> action)
+                    {
+                        try { await action(); }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                        catch (Exception ex) { cleanupErrors.Add($"{name}: {ex.Message}"); }
+                    }
+
+                    async Task<TDoc?> SafeReadAsync<TDoc>(Container container, string id, PartitionKey pk) where TDoc : class
+                    {
+                        try
+                        {
+                            var r = await container.ReadItemAsync<TDoc>(id, pk);
+                            return r.Resource;
+                        }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        {
+                            return null;
+                        }
+                    }
+
+                    async Task<int> GetCountAsync(Container c, string query, PartitionKey pk)
+                    {
+                        var it = c.GetItemQueryIterator<int>(new QueryDefinition(query), requestOptions: new QueryRequestOptions { PartitionKey = pk });
+                        int cnt = 0;
+                        while (it.HasMoreResults)
+                        {
+                            var r = await it.ReadNextAsync();
+                            cnt += r.FirstOrDefault();
+                        }
+                        return cnt;
+                    }
+
+                    try
+                    {
+                        // E8 & T5: Assert -999 and -998 partitions are empty before running (INSIDE try)
+                        int preRp = await GetCountAsync(rpContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        int prePsm = await GetCountAsync(psmContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        int prePts = await GetCountAsync(ptsContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        int preVtp = await GetCountAsync(vtpContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -999", new PartitionKey(-999.0));
+                        int preVns = await GetCountAsync(vnsContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -999", new PartitionKey(-999.0));
+                        int preVts = await GetCountAsync(vtsContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -999", new PartitionKey(-999.0));
+
+                        int preRbRp = await GetCountAsync(rpContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.ProjectId = -998", new PartitionKey(-998.0));
+                        int preRbPsm = await GetCountAsync(psmContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.ProjectId = -998", new PartitionKey(-998.0));
+                        int preRbPts = await GetCountAsync(ptsContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.ProjectId = -998", new PartitionKey(-998.0));
+                        int preRbVtp = await GetCountAsync(vtpContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -998", new PartitionKey(-998.0));
+                        int preRbVns = await GetCountAsync(vnsContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -998", new PartitionKey(-998.0));
+                        int preRbVts = await GetCountAsync(vtsContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -998", new PartitionKey(-998.0));
+
+                        if (preRp > 0 || prePsm > 0 || prePts > 0 || preVtp > 0 || preVns > 0 || preVts > 0 ||
+                            preRbRp > 0 || preRbPsm > 0 || preRbPts > 0 || preRbVtp > 0 || preRbVns > 0 || preRbVts > 0)
+                        {
+                            allPassed = false;
+                            writeSteps.Add(new { step = "AssertPartitionsEmptyBeforeRun", passed = false, error = $"Partitions for -999 or -998 are not empty: rp={preRp}, psm={prePsm}, pts={prePts}, vtp={preVtp}, vns={preVns}, vts={preVts}, rbRp={preRbRp}, rbPsm={preRbPsm}, rbPts={preRbPts}, rbVtp={preRbVtp}, rbVns={preRbVns}, rbVts={preRbVts}" });
+                            return Results.Ok(new { batch = 8, allPassed, checksCount = checks.Count, checks, writeSteps });
+                        }
+                        writeSteps.Add(new { step = "AssertPartitionsEmptyBeforeRun", passed = true });
+
+                        // E6 & E7: Build -999 config in-memory and write to Cosmos
+                        int testVtId = -999;
+                        int testProjectId = -999;
+
+                        // Parts (2 parts)
+                        var partDoc1 = new VesselTypePartMappingDocument
+                        {
+                            id = "-9991",
+                            VesselTypePartMappingId = -9991,
+                            VesselTypeId = testVtId,
+                            PartName = "Batch8 Test Part 1",
+                            SequenceNo = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date,
+                            RequiredInReport = true
+                        };
+                        var partDoc2 = new VesselTypePartMappingDocument
+                        {
+                            id = "-9992",
+                            VesselTypePartMappingId = -9992,
+                            VesselTypeId = testVtId,
+                            PartName = "Batch8 Test Part 2",
+                            SequenceNo = 2,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date,
+                            RequiredInReport = true
+                        };
+                        await vtpContainer.CreateItemAsync(partDoc1, new PartitionKey((double)testVtId));
+                        trackedVtp.Add((partDoc1.id, testVtId));
+                        await vtpContainer.CreateItemAsync(partDoc2, new PartitionKey((double)testVtId));
+                        trackedVtp.Add((partDoc2.id, testVtId));
+
+                        // Normal Sections (2 sections)
+                        var testSecGuid1 = Guid.NewGuid();
+                        var testSecGuid2 = Guid.NewGuid();
+                        var secDoc1 = new VesselTypeNormalSectionMappingDocument
+                        {
+                            id = testSecGuid1.ToString(),
+                            SectionMappingId = testSecGuid1.ToString(),
+                            VesselTypePartMappingId = -9991,
+                            VesselTypeId = testVtId,
+                            SectionName = "Batch8 Test Section 1",
+                            SubHeader = "SubHeader 1",
+                            Order = 1,
+                            HasSubSection = true, // T2: HasSubSection = true so CreateProjectSubParts runs
+                            TotalCards = 4,
+                            PlaceholderCount = 2,
+                            FileNameCount = 2,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date,
+                            RequiredInReport = true
+                        };
+                        var secDoc2 = new VesselTypeNormalSectionMappingDocument
+                        {
+                            id = testSecGuid2.ToString(),
+                            SectionMappingId = testSecGuid2.ToString(),
+                            VesselTypePartMappingId = -9991,
+                            VesselTypeId = testVtId,
+                            SectionName = "Batch8 Test Section 2",
+                            SubHeader = "SubHeader 2",
+                            Order = 2,
+                            TotalCards = 4,
+                            PlaceholderCount = 2,
+                            FileNameCount = 2,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date,
+                            RequiredInReport = true
+                        };
+                        await vnsContainer.CreateItemAsync(secDoc1, new PartitionKey((double)testVtId));
+                        trackedVns.Add((secDoc1.id, testVtId));
+                        await vnsContainer.CreateItemAsync(secDoc2, new PartitionKey((double)testVtId));
+                        trackedVns.Add((secDoc2.id, testVtId));
+
+                        // Subsection under Section 1
+                        var testSubSecGuid = Guid.NewGuid();
+                        var vsubDoc = new VesselTypeSubSectionDocument
+                        {
+                            id = testSubSecGuid.ToString(),
+                            Id = testSubSecGuid.ToString(),
+                            VesselTypeSectionId = testSecGuid1.ToString(),
+                            SectionName = "Batch8 Test Subsection 1",
+                            OrderNumber = 1,
+                            Totalcards = 2,
+                            PlaceholderCount = 1,
+                            FileNameCount = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsubContainer.CreateItemAsync(vsubDoc, new PartitionKey(vsubDoc.id));
+                        trackedVsub.Add(vsubDoc.id);
+
+                        // Subsection description mapping for Subsection 1 (T2)
+                        var vsubDescId = $"{testSubSecGuid}|301";
+                        var vsubDescDoc = new VesselTypeSubSectionDescriptionMappingDocument
+                        {
+                            id = vsubDescId,
+                            SubSectionId = testSubSecGuid.ToString(),
+                            CategoryId = 301,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsubDescContainer.CreateItemAsync(vsubDescDoc, new PartitionKey(vsubDescDoc.id));
+                        trackedVsubDesc.Add(vsubDescDoc.id);
+
+                        // Tank Section
+                        var testTankSecGuid = Guid.NewGuid();
+                        var tankDoc = new VesselTypeTankSectionMappingDocument
+                        {
+                            id = testTankSecGuid.ToString(),
+                            VesselTypeTankSectionMappingId = testTankSecGuid.ToString(),
+                            VesselTypePartMappingId = -9992,
+                            VesselTypeId = testVtId,
+                            TankTypeId = 701,
+                            TotalCards = 2,
+                            PlaceholderCount = 1,
+                            FileNameCount = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vtsContainer.CreateItemAsync(tankDoc, new PartitionKey((double)testVtId));
+                        trackedVts.Add((tankDoc.id, testVtId));
+
+                        // Description mapping for Section 1: TWO categories!
+                        var vsdId1 = $"{testSecGuid1}|101";
+                        var vsdId2 = $"{testSecGuid1}|102";
+                        var vsdDoc1 = new VesselTypeSectionDescriptionMappingDocument
+                        {
+                            id = vsdId1,
+                            SectionId = testSecGuid1.ToString(),
+                            CategoryId = 101,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        var vsdDoc2 = new VesselTypeSectionDescriptionMappingDocument
+                        {
+                            id = vsdId2,
+                            SectionId = testSecGuid1.ToString(),
+                            CategoryId = 102,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsdContainer.CreateItemAsync(vsdDoc1, new PartitionKey(vsdDoc1.id));
+                        trackedVsd.Add(vsdDoc1.id);
+                        await vsdContainer.CreateItemAsync(vsdDoc2, new PartitionKey(vsdDoc2.id));
+                        trackedVsd.Add(vsdDoc2.id);
+
+                        // Section grading mapping for Section 1
+                        var vsgId = $"{testSecGuid1}|201";
+                        var vsgDoc = new VesselTypeSectionGradingMappingDocument
+                        {
+                            id = vsgId,
+                            SectionId = testSecGuid1.ToString(),
+                            CategoryId = 201,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "SetupTester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "SetupTester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsgContainer.CreateItemAsync(vsgDoc, new PartitionKey(vsgDoc.id));
+                        trackedVsg.Add(vsgDoc.id);
+
+                        // 1. CreateProjectReportTemplate with imoExists = true
+                        var createTmplRes = await cosmosReportPartRepo.CreateProjectReportTemplate(testVtId, "ParityUserBatch8", testProjectId, true, 9999999);
+                        writeSteps.Add(new { step = "CreateProjectReportTemplate(valid)", passed = createTmplRes });
+                        if (!createTmplRes) allPassed = false;
+
+                        // Read-backs and assertions for CreateProjectReportTemplate (T3: assert every column)
+                        // a) ReportPart: 2 items
+                        var createdRp = new List<ReportPartDocument>();
+                        using (var it = rpContainer.GetItemQueryIterator<ReportPartDocument>(new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = @pid").WithParameter("@pid", testProjectId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testProjectId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                createdRp.AddRange(r);
+                                foreach (var d in r) trackedRp.Add((d.id, testProjectId));
+                            }
+                        }
+                        bool rpOk = createdRp.Count == 2 && createdRp.All(d =>
+                            d.ProjectId == testProjectId &&
+                            d.IsDeleted == false &&
+                            d.IsActive == true &&
+                            d.CreatedBy == "ParityUserBatch8" &&
+                            d.CreatedOn.HasValue &&
+                            d.ModifiedBy == "ParityUserBatch8" &&
+                            d.ModifiedOn.HasValue &&
+                            d.RequiredInReport == true)
+                            && createdRp.Any(d => d.PartName == "Batch8 Test Part 1" && d.SequenceNo == 1 && d.PartId == -9991 && d.id == $"{testProjectId}|-9991")
+                            && createdRp.Any(d => d.PartName == "Batch8 Test Part 2" && d.SequenceNo == 2 && d.PartId == -9992 && d.id == $"{testProjectId}|-9992");
+
+                        // b) ProjectSectionMapping: 2 items (T3: assert every column)
+                        var createdPsm = new List<ProjectSectionMappingDocument>();
+                        using (var it = psmContainer.GetItemQueryIterator<ProjectSectionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = @pid").WithParameter("@pid", testProjectId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testProjectId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                createdPsm.AddRange(r);
+                                foreach (var d in r) trackedPsm.Add((d.id, testProjectId));
+                            }
+                        }
+                        bool psmOk = createdPsm.Count == 2 && createdPsm.All(d =>
+                            d.ProjectId == testProjectId &&
+                            d.IsDeleted == false &&
+                            d.IsActive == true &&
+                            d.CreatedBy == "ParityUserBatch8" &&
+                            d.CreatedOn.HasValue &&
+                            d.ModifiedBy == "ParityUserBatch8" &&
+                            d.ModifiedOn.HasValue &&
+                            d.RequiredInReport == true &&
+                            d.TotalCards == 4 && d.PlaceholderCount == 2 && d.FileNameCount == 2 &&
+                            d.id == d.SectionMappingId && !string.IsNullOrEmpty(d.id) &&
+                            d.PartId == -9991)
+                            && createdPsm.Any(d => d.SectionName == "Batch8 Test Section 1" && d.SubHeader == "SubHeader 1" && d.Order == 1 && d.HasSubSection == true)
+                            && createdPsm.Any(d => d.SectionName == "Batch8 Test Section 2" && d.SubHeader == "SubHeader 2" && d.Order == 2 && d.HasSubSection == false);
+
+                        // c) ProjectTankSectionMapping: 1 item (because imoExists = true) (T3: assert every column)
+                        var createdPts = new List<ProjectTankSectionMappingDocument>();
+                        using (var it = ptsContainer.GetItemQueryIterator<ProjectTankSectionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = @pid").WithParameter("@pid", testProjectId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testProjectId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                createdPts.AddRange(r);
+                                foreach (var d in r) trackedPts.Add((d.id, testProjectId));
+                            }
+                        }
+                        bool ptsOk = createdPts.Count == 1 && createdPts.All(d =>
+                            d.ProjectId == testProjectId &&
+                            d.TankTypeId == 701 &&
+                            d.IsDeleted == false &&
+                            d.IsActive == true &&
+                            d.CreatedBy == "ParityUserBatch8" &&
+                            d.CreatedOn.HasValue &&
+                            d.ModifiedBy == "ParityUserBatch8" &&
+                            d.ModifiedOn.HasValue &&
+                            d.TotalCards == 2 && d.PlaceholderCount == 1 && d.FileNameCount == 1 &&
+                            d.id == d.TankSectionMappingId && !string.IsNullOrEmpty(d.id) &&
+                            d.PartId == -9992);
+
+                        // d) ProjectSubSection: created for Section 1 with 'NVijyakumar@eagle.org' (T3: assert every column)
+                        var psm1 = createdPsm.FirstOrDefault(s => s.SectionName == "Batch8 Test Section 1");
+                        var createdPsub = new List<ProjectSubSectionDocument>();
+                        if (psm1 != null)
+                        {
+                            using (var it = psubContainer.GetItemQueryIterator<ProjectSubSectionDocument>(new QueryDefinition("SELECT * FROM c WHERE c.ProjectSectionId = @secId").WithParameter("@secId", psm1.SectionMappingId)))
+                            {
+                                while (it.HasMoreResults)
+                                {
+                                    var r = await it.ReadNextAsync();
+                                    createdPsub.AddRange(r);
+                                    foreach (var d in r) trackedPsub.Add(d.id);
+                                }
+                            }
+                        }
+                        bool psubOk = createdPsub.Count == 1 && createdPsub.All(d =>
+                            d.id == d.Id && !string.IsNullOrEmpty(d.id) &&
+                            d.ProjectSectionId == psm1!.SectionMappingId &&
+                            d.SectionName == "Batch8 Test Subsection 1" &&
+                            d.OrderNumber == 1 &&
+                            d.Totalcards == 2 && d.PlaceholderCount == 1 && d.FileNameCount == 1 &&
+                            d.IsActive == true &&
+                            d.IsDeleted == false &&
+                            d.CreatedBy == "NVijyakumar@eagle.org" &&
+                            d.CreatedOn.HasValue &&
+                            d.ModifiedBy == "NVijyakumar@eagle.org" &&
+                            d.ModifiedOn.HasValue);
+
+                        // e) ProjectSectionDescriptionMapping: BOTH ...|101 and ...|102 exist on section, AND seeded on subsection (T2 & T4)
+                        var createdPsd = new List<ProjectSectionDescriptionMappingDocument>();
+                        if (psm1 != null)
+                        {
+                            using (var it = psdContainer.GetItemQueryIterator<ProjectSectionDescriptionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.SectionId = @secId").WithParameter("@secId", psm1.SectionMappingId)))
+                            {
+                                while (it.HasMoreResults)
+                                {
+                                    var r = await it.ReadNextAsync();
+                                    createdPsd.AddRange(r);
+                                    foreach (var d in r) trackedPsd.Add(d.id);
+                                }
+                            }
+                        }
+                        // Also track ProjectSectionDescriptionMapping by subsection id (T4)
+                        var createdPsdForSub = new List<ProjectSectionDescriptionMappingDocument>();
+                        if (createdPsub.Count > 0)
+                        {
+                            using (var it = psdContainer.GetItemQueryIterator<ProjectSectionDescriptionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.SectionId = @subId").WithParameter("@subId", createdPsub[0].Id)))
+                            {
+                                while (it.HasMoreResults)
+                                {
+                                    var r = await it.ReadNextAsync();
+                                    createdPsdForSub.AddRange(r);
+                                    foreach (var d in r) trackedPsd.Add(d.id);
+                                }
+                            }
+                        }
+                        bool psdOk = createdPsd.Count == 2 
+                            && createdPsd.Any(d => d.CategoryId == 101 && d.id == $"{psm1!.SectionMappingId}|101" && d.SectionId == psm1.SectionMappingId && d.CreatedBy == "ParityUserBatch8" && d.ModifiedBy == "ParityUserBatch8" && d.CreatedOn.HasValue && d.ModifiedOn.HasValue && d.IsActive == true && d.IsDeleted == false)
+                            && createdPsd.Any(d => d.CategoryId == 102 && d.id == $"{psm1!.SectionMappingId}|102" && d.SectionId == psm1.SectionMappingId && d.CreatedBy == "ParityUserBatch8" && d.ModifiedBy == "ParityUserBatch8" && d.CreatedOn.HasValue && d.ModifiedOn.HasValue && d.IsActive == true && d.IsDeleted == false)
+                            && createdPsdForSub.Count == 2
+                            && createdPsdForSub.Any(d => d.CategoryId == 101 && d.id == $"{createdPsub[0].Id}|101" && d.SectionId == createdPsub[0].Id && d.CreatedBy == "ParityUserBatch8" && d.ModifiedBy == "ParityUserBatch8" && d.CreatedOn.HasValue && d.ModifiedOn.HasValue && d.IsActive == true && d.IsDeleted == false)
+                            && createdPsdForSub.Any(d => d.CategoryId == 102 && d.id == $"{createdPsub[0].Id}|102" && d.SectionId == createdPsub[0].Id && d.CreatedBy == "ParityUserBatch8" && d.ModifiedBy == "ParityUserBatch8" && d.CreatedOn.HasValue && d.ModifiedOn.HasValue && d.IsActive == true && d.IsDeleted == false);
+
+                        // f) ProjectSubSectionDescriptionMapping: ...|301 exists! (T2 & T4: fill trackedPsdSub)
+                        var createdPsdSub = new List<ProjectSubSectionDescriptionMappingDocument>();
+                        if (createdPsub.Count > 0)
+                        {
+                            using (var it = psdSubContainer.GetItemQueryIterator<ProjectSubSectionDescriptionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.SubSectionId = @subId").WithParameter("@subId", createdPsub[0].Id)))
+                            {
+                                while (it.HasMoreResults)
+                                {
+                                    var r = await it.ReadNextAsync();
+                                    createdPsdSub.AddRange(r);
+                                    foreach (var d in r) trackedPsdSub.Add(d.id);
+                                }
+                            }
+                        }
+                        bool psdSubOk = createdPsdSub.Count == 1 
+                            && createdPsdSub[0].id == $"{createdPsub[0].Id}|301"
+                            && createdPsdSub[0].CategoryId == 301
+                            && createdPsdSub[0].SubSectionId == createdPsub[0].Id
+                            && createdPsdSub[0].CreatedBy == "ParityUserBatch8"
+                            && createdPsdSub[0].ModifiedBy == "ParityUserBatch8"
+                            && createdPsdSub[0].CreatedOn.HasValue
+                            && createdPsdSub[0].ModifiedOn.HasValue
+                            && createdPsdSub[0].IsActive == true
+                            && createdPsdSub[0].IsDeleted == false;
+
+                        // g) ProjectSectionGradingMapping: ...|201 exists!
+                        var createdPsg = new List<ProjectSectionGradingMappingDocument>();
+                        if (psm1 != null)
+                        {
+                            using (var it = psgContainer.GetItemQueryIterator<ProjectSectionGradingMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.SectionId = @secId").WithParameter("@secId", psm1.SectionMappingId)))
+                            {
+                                while (it.HasMoreResults)
+                                {
+                                    var r = await it.ReadNextAsync();
+                                    createdPsg.AddRange(r);
+                                    foreach (var d in r) trackedPsg.Add(d.id);
+                                }
+                            }
+                        }
+                        bool psgOk = createdPsg.Count == 1 
+                            && createdPsg[0].id == $"{psm1!.SectionMappingId}|201"
+                            && createdPsg[0].CategoryId == 201
+                            && createdPsg[0].SectionId == psm1.SectionMappingId
+                            && createdPsg[0].CreatedBy == "ParityUserBatch8"
+                            && createdPsg[0].ModifiedBy == "ParityUserBatch8"
+                            && createdPsg[0].CreatedOn.HasValue
+                            && createdPsg[0].ModifiedOn.HasValue
+                            && createdPsg[0].IsActive == true
+                            && createdPsg[0].IsDeleted == false;
+
+                        bool allCreateTmplReadbacksOk = rpOk && psmOk && ptsOk && psubOk && psdOk && psdSubOk && psgOk;
+                        writeSteps.Add(new { step = "CreateProjectReportTemplate.Readbacks", passed = allCreateTmplReadbacksOk, rpOk, psmOk, ptsOk, psubOk, psdOk, psdSubOk, psgOk });
+                        if (!allCreateTmplReadbacksOk) allPassed = false;
+
+                        // 2. Rollback test for CreateProjectReportTemplate
+                        int rollbackVtId = -998;
+                        int rollbackProjId = -998;
+                        var rbPart = new VesselTypePartMappingDocument
+                        {
+                            id = "-9981",
+                            VesselTypePartMappingId = -9981,
+                            VesselTypeId = rollbackVtId,
+                            PartName = "Rollback Part",
+                            SequenceNo = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date,
+                            RequiredInReport = true
+                        };
+                        await vtpContainer.CreateItemAsync(rbPart, new PartitionKey((double)rollbackVtId));
+                        trackedVtp.Add((rbPart.id, rollbackVtId));
+
+                        var rbSecGuid1 = Guid.NewGuid();
+                        var rbSecGuid2 = Guid.NewGuid();
+                        var rbSec1 = new VesselTypeNormalSectionMappingDocument
+                        {
+                            id = rbSecGuid1.ToString(),
+                            SectionMappingId = rbSecGuid1.ToString(),
+                            VesselTypePartMappingId = -9981,
+                            VesselTypeId = rollbackVtId,
+                            SectionName = "Same Section Name",
+                            SubHeader = "Sub",
+                            Order = 1,
+                            HasSubSection = true, // Y1(a): HasSubSection = true so subsection steps run
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date,
+                            RequiredInReport = true
+                        };
+                        var rbSec2 = new VesselTypeNormalSectionMappingDocument
+                        {
+                            id = rbSecGuid2.ToString(),
+                            SectionMappingId = rbSecGuid2.ToString(),
+                            VesselTypePartMappingId = -9981,
+                            VesselTypeId = rollbackVtId,
+                            SectionName = "Same Section Name",
+                            SubHeader = "Sub",
+                            Order = 2,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date,
+                            RequiredInReport = true
+                        };
+                        await vnsContainer.CreateItemAsync(rbSec1, new PartitionKey((double)rollbackVtId));
+                        trackedVns.Add((rbSec1.id, rollbackVtId));
+                        await vnsContainer.CreateItemAsync(rbSec2, new PartitionKey((double)rollbackVtId));
+                        trackedVns.Add((rbSec2.id, rollbackVtId));
+
+                        // Y1(a): Subsection under rbSec1
+                        var rbSubSecGuid = Guid.NewGuid();
+                        var rbSubSecDoc = new VesselTypeSubSectionDocument
+                        {
+                            id = rbSubSecGuid.ToString(),
+                            Id = rbSubSecGuid.ToString(),
+                            VesselTypeSectionId = rbSecGuid1.ToString(),
+                            SectionName = "Rollback Test Subsection",
+                            OrderNumber = 1,
+                            Totalcards = 2,
+                            PlaceholderCount = 1,
+                            FileNameCount = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsubContainer.CreateItemAsync(rbSubSecDoc, new PartitionKey(rbSubSecDoc.id));
+                        trackedVsub.Add(rbSubSecDoc.id);
+
+                        // Y1(a): Subsection description mapping
+                        var rbVsubDescDoc = new VesselTypeSubSectionDescriptionMappingDocument
+                        {
+                            id = $"{rbSubSecGuid}|301",
+                            SubSectionId = rbSubSecGuid.ToString(),
+                            CategoryId = 301,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsubDescContainer.CreateItemAsync(rbVsubDescDoc, new PartitionKey(rbVsubDescDoc.id));
+                        trackedVsubDesc.Add(rbVsubDescDoc.id);
+
+                        // Y1(a): Section description mapping
+                        var rbVsdDoc = new VesselTypeSectionDescriptionMappingDocument
+                        {
+                            id = $"{rbSecGuid1}|101",
+                            SectionId = rbSecGuid1.ToString(),
+                            CategoryId = 101,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsdContainer.CreateItemAsync(rbVsdDoc, new PartitionKey(rbVsdDoc.id));
+                        trackedVsd.Add(rbVsdDoc.id);
+
+                        // Y1(a): Section grading mappings (forces duplicate mapId at step 8 - the LAST step!)
+                        var rbVsg1 = new VesselTypeSectionGradingMappingDocument
+                        {
+                            id = $"{rbSecGuid1}|301",
+                            SectionId = rbSecGuid1.ToString(),
+                            CategoryId = 301,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        var rbVsg2 = new VesselTypeSectionGradingMappingDocument
+                        {
+                            id = $"{rbSecGuid2}|301",
+                            SectionId = rbSecGuid2.ToString(),
+                            CategoryId = 301,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "Tester",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "Tester",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        await vsgContainer.CreateItemAsync(rbVsg1, new PartitionKey(rbVsg1.id));
+                        trackedVsg.Add(rbVsg1.id);
+                        await vsgContainer.CreateItemAsync(rbVsg2, new PartitionKey(rbVsg2.id));
+                        trackedVsg.Add(rbVsg2.id);
+
+                        var rollbackRes = await cosmosReportPartRepo.CreateProjectReportTemplate(rollbackVtId, "RbUser", rollbackProjId, false, 0);
+                        bool rollbackTriggered = !rollbackRes;
+
+                        // Y1(b) & (c): Count by -998 project/section/subsection ids, track any doc found for cleanup
+                        var rbRpDocs = new List<ReportPartDocument>();
+                        using (var it = rpContainer.GetItemQueryIterator<ReportPartDocument>(new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -998"), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(-998.0) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                rbRpDocs.AddRange(r);
+                                foreach (var d in r) trackedRp.Add((d.id, -998));
+                            }
+                        }
+                        int rbRpCount = rbRpDocs.Count;
+
+                        var rbPsmDocs = new List<ProjectSectionMappingDocument>();
+                        using (var it = psmContainer.GetItemQueryIterator<ProjectSectionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -998"), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(-998.0) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                rbPsmDocs.AddRange(r);
+                                foreach (var d in r) trackedPsm.Add((d.id, -998));
+                            }
+                        }
+                        int rbPsmCount = rbPsmDocs.Count;
+
+                        var rbPtsDocs = new List<ProjectTankSectionMappingDocument>();
+                        using (var it = ptsContainer.GetItemQueryIterator<ProjectTankSectionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = -998"), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(-998.0) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                rbPtsDocs.AddRange(r);
+                                foreach (var d in r) trackedPts.Add((d.id, -998));
+                            }
+                        }
+                        int rbPtsCount = rbPtsDocs.Count;
+
+                        var setupSectionIds = new List<string> { rbSecGuid1.ToString(), rbSecGuid2.ToString() };
+                        setupSectionIds.AddRange(rbPsmDocs.Select(s => s.SectionMappingId).Where(id => !string.IsNullOrEmpty(id))!);
+
+                        var setupSubSecIds = new List<string> { rbSubSecGuid.ToString() };
+
+                        var rbPsubDocs = new List<ProjectSubSectionDocument>();
+                        using (var it = psubContainer.GetItemQueryIterator<ProjectSubSectionDocument>(new QueryDefinition(
+                            "SELECT * FROM c WHERE ARRAY_CONTAINS(@secIds, c.ProjectSectionId) OR c.SectionName = 'Rollback Test Subsection'")
+                            .WithParameter("@secIds", setupSectionIds)))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                rbPsubDocs.AddRange(r);
+                                foreach (var d in r) trackedPsub.Add(d.id);
+                            }
+                        }
+                        int rbPsubCount = rbPsubDocs.Count;
+                        setupSubSecIds.AddRange(rbPsubDocs.Select(s => s.Id).Where(id => !string.IsNullOrEmpty(id))!);
+
+                        var allSecAndSubIds = setupSectionIds.Concat(setupSubSecIds).Distinct().ToList();
+
+                        var rbPsdDocs = new List<ProjectSectionDescriptionMappingDocument>();
+                        using (var it = psdContainer.GetItemQueryIterator<ProjectSectionDescriptionMappingDocument>(new QueryDefinition(
+                            "SELECT * FROM c WHERE ARRAY_CONTAINS(@allIds, c.SectionId)")
+                            .WithParameter("@allIds", allSecAndSubIds)))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                rbPsdDocs.AddRange(r);
+                                foreach (var d in r) trackedPsd.Add(d.id);
+                            }
+                        }
+                        int rbPsdCount = rbPsdDocs.Count;
+
+                        var rbPsdSubDocs = new List<ProjectSubSectionDescriptionMappingDocument>();
+                        using (var it = psdSubContainer.GetItemQueryIterator<ProjectSubSectionDescriptionMappingDocument>(new QueryDefinition(
+                            "SELECT * FROM c WHERE ARRAY_CONTAINS(@subIds, c.SubSectionId)")
+                            .WithParameter("@subIds", setupSubSecIds)))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                rbPsdSubDocs.AddRange(r);
+                                foreach (var d in r) trackedPsdSub.Add(d.id);
+                            }
+                        }
+                        int rbPsdSubCount = rbPsdSubDocs.Count;
+
+                        var rbPsgDocs = new List<ProjectSectionGradingMappingDocument>();
+                        using (var it = psgContainer.GetItemQueryIterator<ProjectSectionGradingMappingDocument>(new QueryDefinition(
+                            "SELECT * FROM c WHERE ARRAY_CONTAINS(@secIds, c.SectionId)")
+                            .WithParameter("@secIds", setupSectionIds)))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                rbPsgDocs.AddRange(r);
+                                foreach (var d in r) trackedPsg.Add(d.id);
+                            }
+                        }
+                        int rbPsgCount = rbPsgDocs.Count;
+
+                        bool rollbackZeroDocs = rbRpCount == 0 && rbPsmCount == 0 && rbPtsCount == 0 && rbPsubCount == 0 && rbPsdCount == 0 && rbPsdSubCount == 0 && rbPsgCount == 0;
+
+                        bool rollbackPassed = rollbackTriggered && rollbackZeroDocs;
+                        writeSteps.Add(new { step = "CreateProjectReportTemplate.RollbackOnConflict", passed = rollbackPassed, rollbackTriggered, rollbackZeroDocs, rbRpCount, rbPsmCount, rbPtsCount, rbPsubCount, rbPsdCount, rbPsdSubCount, rbPsgCount });
+                        if (!rollbackPassed) allPassed = false;
+
+                        // 3. CreateReportPart (Helper 14: Sp_Create_VesseltypeReportConfig)
+                        // a) New part, and part update
+                        var testNewPartName = "Batch8 New Part A";
+                        var reportConfig1 = new VesselTypeReportConfigList
+                        {
+                            reportParts = new List<VesselTypePartMapping>
+                            {
+                                new VesselTypePartMapping
+                                {
+                                    vesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = testNewPartName,
+                                    SequenceNo = 10,
+                                    IsActive = true,
+                                    CreatedBy = "PartCreator"
+                                }
+                            }
+                        };
+                        var createPartRes1 = await cosmosReportPartRepo.CreateReportPart(reportConfig1, testVtId, "Modifier");
+                        var partsForVt = new List<VesselTypePartMappingDocument>();
+                        using (var it = vtpContainer.GetItemQueryIterator<VesselTypePartMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.VesselTypeId = @vtid AND c.PartName = @pname").WithParameter("@vtid", testVtId).WithParameter("@pname", testNewPartName), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testVtId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                partsForVt.AddRange(r);
+                                foreach (var d in r) trackedVtp.Add((d.id, testVtId));
+                            }
+                        }
+                        var newPartDoc = partsForVt.FirstOrDefault();
+                        bool newPartCreated = createPartRes1 && newPartDoc != null
+                            && newPartDoc.id != null && newPartDoc.VesselTypePartMappingId != 0
+                            && newPartDoc.VesselTypeId == testVtId
+                            && newPartDoc.PartName == testNewPartName
+                            && newPartDoc.SequenceNo == 10
+                            && newPartDoc.IsActive == true
+                            && newPartDoc.IsDeleted == false
+                            && newPartDoc.CreatedBy == "Modifier"
+                            && newPartDoc.CreatedOn.HasValue
+                            && newPartDoc.ModifiedBy == "Modifier"
+                            && newPartDoc.ModifiedOn.HasValue
+                            && newPartDoc.RequiredInReport == true;
+
+                        bool partUpdated = false;
+                        if (newPartDoc != null)
+                        {
+                            var updatePartConfig = new VesselTypeReportConfigList
+                            {
+                                reportParts = new List<VesselTypePartMapping>
+                                {
+                                    new VesselTypePartMapping
+                                    {
+                                        vesselTypePartMappingId = newPartDoc.VesselTypePartMappingId,
+                                        VesselTypeId = testVtId,
+                                        PartName = testNewPartName,
+                                        SequenceNo = 20,
+                                        IsActive = true,
+                                        CreatedBy = "PartUpdater"
+                                    }
+                                }
+                            };
+                            var updatePartRes = await cosmosReportPartRepo.CreateReportPart(updatePartConfig, testVtId, "Modifier2");
+                            var updatedPartDoc = await SafeReadAsync<VesselTypePartMappingDocument>(vtpContainer, newPartDoc.id, new PartitionKey((double)testVtId));
+                            partUpdated = updatePartRes && updatedPartDoc != null
+                                && updatedPartDoc.id == newPartDoc.id
+                                && updatedPartDoc.VesselTypePartMappingId == newPartDoc.VesselTypePartMappingId
+                                && updatedPartDoc.VesselTypeId == testVtId
+                                && updatedPartDoc.PartName == testNewPartName
+                                && updatedPartDoc.SequenceNo == 20
+                                && updatedPartDoc.IsActive == true
+                                && updatedPartDoc.IsDeleted == false
+                                && updatedPartDoc.CreatedBy == "Modifier"
+                                && updatedPartDoc.CreatedOn.HasValue
+                                && updatedPartDoc.ModifiedBy == "PartUpdater"
+                                && updatedPartDoc.ModifiedOn.HasValue
+                                && updatedPartDoc.RequiredInReport == true;
+                        }
+                        bool partMergeOk = newPartCreated && partUpdated;
+                        writeSteps.Add(new { step = "CreateReportPart.PartNewAndUpdate", passed = partMergeOk, newPartCreated, partUpdated });
+                        if (!partMergeOk) allPassed = false;
+
+                        // b) Two new sections in one part -> same [Order]
+                        var reportConfigTwoSecs = new VesselTypeReportConfigList
+                        {
+                            normalSectionMappings = new List<VesselTypeSectionMapping>
+                            {
+                                new VesselTypeSectionMapping
+                                {
+                                    VesselTypeNormalSectionMappingId = Guid.Empty,
+                                    VesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = testNewPartName,
+                                    SectionName = "Order Test Sec 1",
+                                    SubHeader = "H1",
+                                    TotalCards = 2,
+                                    IsActive = true,
+                                    CreatedBy = "Tester"
+                                },
+                                new VesselTypeSectionMapping
+                                {
+                                    VesselTypeNormalSectionMappingId = Guid.Empty,
+                                    VesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = testNewPartName,
+                                    SectionName = "Order Test Sec 2",
+                                    SubHeader = "H2",
+                                    TotalCards = 2,
+                                    IsActive = true,
+                                    CreatedBy = "Tester"
+                                }
+                            }
+                        };
+                        var createTwoSecsRes = await cosmosReportPartRepo.CreateReportPart(reportConfigTwoSecs, testVtId, "Modifier");
+                        var createdTwoSecs = new List<VesselTypeNormalSectionMappingDocument>();
+                        using (var it = vnsContainer.GetItemQueryIterator<VesselTypeNormalSectionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.VesselTypeId = @vtid AND (c.SectionName = 'Order Test Sec 1' OR c.SectionName = 'Order Test Sec 2')").WithParameter("@vtid", testVtId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testVtId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                createdTwoSecs.AddRange(r);
+                                foreach (var d in r) trackedVns.Add((d.id, testVtId));
+                            }
+                        }
+                        bool twoSecsSameOrder = createTwoSecsRes && createdTwoSecs.Count == 2
+                            && createdTwoSecs.All(d => d.id != null && d.SectionMappingId == d.id && Guid.TryParse(d.id, out _) && d.VesselTypeId == testVtId && d.VesselTypePartMappingId == newPartDoc.VesselTypePartMappingId && d.TotalCards == 2 && d.IsActive == true && d.IsDeleted == false && d.CreatedBy == "Modifier" && d.CreatedOn.HasValue && d.ModifiedBy == "Modifier" && d.ModifiedOn.HasValue && d.RequiredInReport == false)
+                            && createdTwoSecs.Any(d => d.SectionName == "Order Test Sec 1" && d.SubHeader == "H1" && d.Order == 1)
+                            && createdTwoSecs.Any(d => d.SectionName == "Order Test Sec 2" && d.SubHeader == "H2" && d.Order == 1);
+                        writeSteps.Add(new { step = "CreateReportPart.TwoNewSectionsSameOrder", passed = twoSecsSameOrder, count = createdTwoSecs.Count, orders = createdTwoSecs.Select(s => s.Order).ToList() });
+                        if (!twoSecsSameOrder) allPassed = false;
+
+                        // c) Section update
+                        bool secUpdated = false;
+                        if (createdTwoSecs.Count > 0)
+                        {
+                            var targetSec = createdTwoSecs[0];
+                            var updateSecConfig = new VesselTypeReportConfigList
+                            {
+                                normalSectionMappings = new List<VesselTypeSectionMapping>
+                                {
+                                    new VesselTypeSectionMapping
+                                    {
+                                        VesselTypeNormalSectionMappingId = Guid.Parse(targetSec.SectionMappingId!),
+                                        VesselTypePartMappingId = targetSec.VesselTypePartMappingId,
+                                        VesselTypeId = testVtId,
+                                        PartName = testNewPartName,
+                                        SectionName = "Updated Sec Name",
+                                        SubHeader = "Updated Header",
+                                        TotalCards = 10,
+                                        IsActive = true,
+                                        CreatedBy = "SecUpdater"
+                                    }
+                                }
+                            };
+                            var updateSecRes = await cosmosReportPartRepo.CreateReportPart(updateSecConfig, testVtId, "Modifier");
+                            var updatedSecDoc = await SafeReadAsync<VesselTypeNormalSectionMappingDocument>(vnsContainer, targetSec.id, new PartitionKey((double)testVtId));
+                            secUpdated = updateSecRes && updatedSecDoc != null
+                                && updatedSecDoc.id == targetSec.id
+                                && updatedSecDoc.SectionMappingId == targetSec.SectionMappingId
+                                && updatedSecDoc.VesselTypeId == testVtId
+                                && updatedSecDoc.VesselTypePartMappingId == targetSec.VesselTypePartMappingId
+                                && updatedSecDoc.SectionName == "Updated Sec Name"
+                                && updatedSecDoc.SubHeader == "Updated Header"
+                                && updatedSecDoc.TotalCards == 10
+                                && updatedSecDoc.Order == targetSec.Order
+                                && updatedSecDoc.IsActive == true
+                                && updatedSecDoc.IsDeleted == false
+                                && updatedSecDoc.CreatedBy == targetSec.CreatedBy
+                                && updatedSecDoc.CreatedOn.HasValue
+                                && updatedSecDoc.ModifiedBy == "Modifier"
+                                && updatedSecDoc.ModifiedOn.HasValue
+                                && updatedSecDoc.RequiredInReport == targetSec.RequiredInReport;
+                        }
+                        writeSteps.Add(new { step = "CreateReportPart.SectionUpdate", passed = secUpdated });
+                        if (!secUpdated) allPassed = false;
+
+                        // d) New tank section, and tank section update (with PartName set)
+                        var reportConfigTank = new VesselTypeReportConfigList
+                        {
+                            tankSectionMappings = new List<VesselTypeTankSectionMapping>
+                            {
+                                new VesselTypeTankSectionMapping
+                                {
+                                    VessselTypeTankSectionMappingId = Guid.Empty,
+                                    VesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = testNewPartName,
+                                    TankTypeId = 801,
+                                    TotalCards = 4,
+                                    IsActive = true,
+                                    CreatedBy = "TankCreator"
+                                }
+                            }
+                        };
+                        var createTankRes = await cosmosReportPartRepo.CreateReportPart(reportConfigTank, testVtId, "Modifier");
+                        var createdTanks = new List<VesselTypeTankSectionMappingDocument>();
+                        using (var it = vtsContainer.GetItemQueryIterator<VesselTypeTankSectionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.VesselTypeId = @vtid AND c.TankTypeId = 801").WithParameter("@vtid", testVtId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testVtId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                createdTanks.AddRange(r);
+                                foreach (var d in r) trackedVts.Add((d.id, testVtId));
+                            }
+                        }
+                        var newTankDoc = createdTanks.FirstOrDefault();
+                        bool tankCreated = createTankRes && newTankDoc != null
+                            && newTankDoc.id != null && newTankDoc.VesselTypeTankSectionMappingId == newTankDoc.id && Guid.TryParse(newTankDoc.id, out _)
+                            && newTankDoc.VesselTypeId == testVtId
+                            && newTankDoc.VesselTypePartMappingId == newPartDoc.VesselTypePartMappingId
+                            && newTankDoc.TankTypeId == 801
+                            && newTankDoc.TotalCards == 4
+                            && newTankDoc.IsActive == true
+                            && newTankDoc.IsDeleted == false
+                            && newTankDoc.CreatedBy == "Modifier"
+                            && newTankDoc.CreatedOn.HasValue
+                            && newTankDoc.ModifiedBy == "Modifier"
+                            && newTankDoc.ModifiedOn.HasValue;
+
+                        bool tankUpdated = false;
+                        if (newTankDoc != null)
+                        {
+                            var updateTankConfig = new VesselTypeReportConfigList
+                            {
+                                tankSectionMappings = new List<VesselTypeTankSectionMapping>
+                                {
+                                    new VesselTypeTankSectionMapping
+                                    {
+                                        VessselTypeTankSectionMappingId = Guid.Parse(newTankDoc.VesselTypeTankSectionMappingId!),
+                                        VesselTypePartMappingId = newTankDoc.VesselTypePartMappingId,
+                                        VesselTypeId = testVtId,
+                                        PartName = testNewPartName,
+                                        TankTypeId = 801,
+                                        TotalCards = 8,
+                                        IsActive = true,
+                                        CreatedBy = "TankUpdater"
+                                    }
+                                }
+                            };
+                            var updateTankRes = await cosmosReportPartRepo.CreateReportPart(updateTankConfig, testVtId, "Modifier");
+                            var updatedTankDoc = await SafeReadAsync<VesselTypeTankSectionMappingDocument>(vtsContainer, newTankDoc.id, new PartitionKey((double)testVtId));
+                            tankUpdated = updateTankRes && updatedTankDoc != null
+                                && updatedTankDoc.id == newTankDoc.id
+                                && updatedTankDoc.VesselTypeTankSectionMappingId == newTankDoc.VesselTypeTankSectionMappingId
+                                && updatedTankDoc.VesselTypeId == testVtId
+                                && updatedTankDoc.VesselTypePartMappingId == newTankDoc.VesselTypePartMappingId
+                                && updatedTankDoc.TankTypeId == 801
+                                && updatedTankDoc.TotalCards == 8
+                                && updatedTankDoc.IsActive == true
+                                && updatedTankDoc.IsDeleted == false
+                                && updatedTankDoc.CreatedBy == newTankDoc.CreatedBy
+                                && updatedTankDoc.CreatedOn.HasValue
+                                && updatedTankDoc.ModifiedBy == "Modifier"
+                                && updatedTankDoc.ModifiedOn.HasValue;
+                        }
+                        bool tankMergeOk = tankCreated && tankUpdated;
+                        writeSteps.Add(new { step = "CreateReportPart.TankSectionNewAndUpdate", passed = tankMergeOk, tankCreated, tankUpdated });
+                        if (!tankMergeOk) allPassed = false;
+
+                        // e) Subsection CreatedBy null and 'x@y' (Trap 10 & E3)
+                        var testSubSecGuidTrap = Guid.NewGuid();
+                        var subTrapDoc = new VesselTypeSubSectionDocument
+                        {
+                            id = testSubSecGuidTrap.ToString(),
+                            Id = testSubSecGuidTrap.ToString(),
+                            VesselTypeSectionId = testSecGuid1.ToString(),
+                            SectionName = "Trap 10 Subsection",
+                            OrderNumber = 1,
+                            Totalcards = 2,
+                            PlaceholderCount = 1,
+                            FileNameCount = 1,
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedBy = "InitialAuthor",
+                            CreatedOn = DateTime.UtcNow.Date,
+                            ModifiedBy = "InitialAuthor",
+                            ModifiedOn = DateTime.UtcNow.Date
+                        };
+                        var createdSubTrapResp = await vsubContainer.CreateItemAsync(subTrapDoc, new PartitionKey(subTrapDoc.id));
+                        trackedVsub.Add(subTrapDoc.id);
+
+                        // Call 1: CreatedBy = null -> expect true, ModifiedBy == "0"
+                        var validSubConfig = new VesselTypeReportConfigList
+                        {
+                            normalSubSectionMappings = new List<VesselTypeSubSectionMapping>
+                            {
+                                new VesselTypeSubSectionMapping
+                                {
+                                    SubSectionId = testSubSecGuidTrap,
+                                    SectionId = testSecGuid1,
+                                    SectionName = "Trap 10 Updated",
+                                    TotalCards = 5,
+                                    IsActive = true,
+                                    IsDeleted = false,
+                                    CreatedBy = null
+                                }
+                            }
+                        };
+                        var subRes1 = await cosmosReportPartRepo.CreateReportPart(validSubConfig, testVtId, "Modifier");
+                        var readSub1 = await SafeReadAsync<VesselTypeSubSectionDocument>(vsubContainer, subTrapDoc.id, new PartitionKey(subTrapDoc.id));
+                        var etagAfterCall1 = readSub1 != null ? (await vsubContainer.ReadItemAsync<VesselTypeSubSectionDocument>(subTrapDoc.id, new PartitionKey(subTrapDoc.id))).ETag : null;
+                        bool trap10ValidOk = subRes1 && readSub1 != null
+                            && readSub1.id == subTrapDoc.id && readSub1.Id == subTrapDoc.Id
+                            && readSub1.VesselTypeSectionId == testSecGuid1.ToString()
+                            && readSub1.SectionName == "Trap 10 Updated"
+                            && readSub1.Totalcards == 5
+                            && readSub1.OrderNumber == subTrapDoc.OrderNumber
+                            && readSub1.IsActive == true
+                            && readSub1.IsDeleted == false
+                            && readSub1.CreatedBy == "InitialAuthor"
+                            && readSub1.CreatedOn.HasValue
+                            && readSub1.ModifiedBy == "0"
+                            && readSub1.ModifiedOn.HasValue;
+
+                        // Call 2: CreatedBy = "x@y" -> expect false, document unchanged (etag equal)
+                        var invalidSubConfig = new VesselTypeReportConfigList
+                        {
+                            normalSubSectionMappings = new List<VesselTypeSubSectionMapping>
+                            {
+                                new VesselTypeSubSectionMapping
+                                {
+                                    SubSectionId = testSubSecGuidTrap,
+                                    SectionId = testSecGuid1,
+                                    SectionName = "Should Not Apply",
+                                    TotalCards = 99,
+                                    IsActive = true,
+                                    IsDeleted = false,
+                                    CreatedBy = "x@y"
+                                }
+                            }
+                        };
+                        var subRes2 = await cosmosReportPartRepo.CreateReportPart(invalidSubConfig, testVtId, "Modifier");
+                        var readSub2Resp = await vsubContainer.ReadItemAsync<VesselTypeSubSectionDocument>(subTrapDoc.id, new PartitionKey(subTrapDoc.id));
+                        bool trap10InvalidOk = !subRes2 && readSub2Resp.ETag == etagAfterCall1 && readSub2Resp.Resource.Totalcards == 5;
+
+                        bool trap10TotalOk = trap10ValidOk && trap10InvalidOk;
+                        writeSteps.Add(new { step = "CreateReportPart.Trap10SubsectionBitConversion", passed = trap10TotalOk, trap10ValidOk, trap10InvalidOk, subRes1, subRes2, modifiedBy = readSub1?.ModifiedBy });
+                        if (!trap10TotalOk) allPassed = false;
+
+                        // f) Too-long PartName (> 100 on part or > 50 on section) -> false and nothing written (T6: assert count unchanged)
+                        int countBeforeTooLong = await GetCountAsync(vtpContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -999", new PartitionKey((double)testVtId));
+                        var tooLongConfig = new VesselTypeReportConfigList
+                        {
+                            reportParts = new List<VesselTypePartMapping>
+                            {
+                                new VesselTypePartMapping
+                                {
+                                    vesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = new string('A', 105),
+                                    SequenceNo = 99,
+                                    IsActive = true
+                                }
+                            }
+                        };
+                        var tooLongRes = await cosmosReportPartRepo.CreateReportPart(tooLongConfig, testVtId, "Modifier");
+                        int countAfterTooLong = await GetCountAsync(vtpContainer, "SELECT VALUE COUNT(1) FROM c WHERE c.VesselTypeId = -999", new PartitionKey((double)testVtId));
+                        bool tooLongOk = !tooLongRes && countAfterTooLong == countBeforeTooLong;
+                        writeSteps.Add(new { step = "CreateReportPart.TooLongPartNameRejection", passed = tooLongOk, countBefore = countBeforeTooLong, countAfter = countAfterTooLong });
+                        if (!tooLongOk) allPassed = false;
+
+                        // g) Two source rows for one target -> false (T6: assert ETag unchanged)
+                        if (newPartDoc != null)
+                        {
+                            var etagBeforeTwoSrc = (await vtpContainer.ReadItemAsync<VesselTypePartMappingDocument>(newPartDoc.id, new PartitionKey((double)testVtId))).ETag;
+                            var twoSourceConfig = new VesselTypeReportConfigList
+                            {
+                                reportParts = new List<VesselTypePartMapping>
+                                {
+                                    new VesselTypePartMapping
+                                    {
+                                        vesselTypePartMappingId = newPartDoc.VesselTypePartMappingId,
+                                        VesselTypeId = testVtId,
+                                        PartName = "Name A",
+                                        SequenceNo = 1
+                                    },
+                                    new VesselTypePartMapping
+                                    {
+                                        vesselTypePartMappingId = newPartDoc.VesselTypePartMappingId,
+                                        VesselTypeId = testVtId,
+                                        PartName = "Name B",
+                                        SequenceNo = 2
+                                    }
+                                }
+                            };
+                            var twoSourceRes = await cosmosReportPartRepo.CreateReportPart(twoSourceConfig, testVtId, "Modifier");
+                            var etagAfterTwoSrc = (await vtpContainer.ReadItemAsync<VesselTypePartMappingDocument>(newPartDoc.id, new PartitionKey((double)testVtId))).ETag;
+                            bool twoSourceOk = !twoSourceRes && etagAfterTwoSrc == etagBeforeTwoSrc;
+                            writeSteps.Add(new { step = "CreateReportPart.TwoSourceOneTargetRejection", passed = twoSourceOk });
+                            if (!twoSourceOk) allPassed = false;
+                        }
+
+                        // h) ModifiedBy source longer than 50 -> false (T6: assert ETag unchanged)
+                        if (newPartDoc != null)
+                        {
+                            var etagBeforeLongMod = (await vtpContainer.ReadItemAsync<VesselTypePartMappingDocument>(newPartDoc.id, new PartitionKey((double)testVtId))).ETag;
+                            var longModifiedByConfig = new VesselTypeReportConfigList
+                            {
+                                reportParts = new List<VesselTypePartMapping>
+                                {
+                                    new VesselTypePartMapping
+                                    {
+                                        vesselTypePartMappingId = newPartDoc.VesselTypePartMappingId,
+                                        VesselTypeId = testVtId,
+                                        PartName = testNewPartName,
+                                        CreatedBy = new string('M', 55)
+                                    }
+                                }
+                            };
+                            var longModRes = await cosmosReportPartRepo.CreateReportPart(longModifiedByConfig, testVtId, "Modifier");
+                            var etagAfterLongMod = (await vtpContainer.ReadItemAsync<VesselTypePartMappingDocument>(newPartDoc.id, new PartitionKey((double)testVtId))).ETag;
+                            bool longModOk = !longModRes && etagAfterLongMod == etagBeforeLongMod;
+                            writeSteps.Add(new { step = "CreateReportPart.LongModifiedByRejection", passed = longModOk });
+                            if (!longModOk) allPassed = false;
+                        }
+
+                        // i) R8a: Two sources with no existing target insert both rows (T6)
+                        var r8aConfig = new VesselTypeReportConfigList
+                        {
+                            reportParts = new List<VesselTypePartMapping>
+                            {
+                                new VesselTypePartMapping
+                                {
+                                    vesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = "R8a Test Part 1",
+                                    SequenceNo = 31,
+                                    IsActive = true,
+                                    CreatedBy = "R8aTester"
+                                },
+                                new VesselTypePartMapping
+                                {
+                                    vesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = "R8a Test Part 2",
+                                    SequenceNo = 32,
+                                    IsActive = true,
+                                    CreatedBy = "R8aTester"
+                                }
+                            }
+                        };
+                        var r8aRes = await cosmosReportPartRepo.CreateReportPart(r8aConfig, testVtId, "Modifier");
+                        var r8aDocs = new List<VesselTypePartMappingDocument>();
+                        using (var it = vtpContainer.GetItemQueryIterator<VesselTypePartMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.VesselTypeId = @vtid AND (c.PartName = 'R8a Test Part 1' OR c.PartName = 'R8a Test Part 2')").WithParameter("@vtid", testVtId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testVtId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                r8aDocs.AddRange(r);
+                                foreach (var d in r) trackedVtp.Add((d.id, testVtId));
+                            }
+                        }
+                        bool r8aOk = r8aRes && r8aDocs.Count == 2;
+                        writeSteps.Add(new { step = "CreateReportPart.R8aTwoSourcesInsert", passed = r8aOk, count = r8aDocs.Count });
+                        if (!r8aOk) allPassed = false;
+
+                        // j) R8b: CreatedBy 60 chars on insert succeeds (<= 100 limit) (T6)
+                        var r8bUser60 = new string('C', 60);
+                        var r8bConfig = new VesselTypeReportConfigList
+                        {
+                            reportParts = new List<VesselTypePartMapping>
+                            {
+                                new VesselTypePartMapping
+                                {
+                                    vesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = "R8b 60Char Part",
+                                    SequenceNo = 40,
+                                    IsActive = true,
+                                    CreatedBy = r8bUser60
+                                }
+                            }
+                        };
+                        var r8bRes = await cosmosReportPartRepo.CreateReportPart(r8bConfig, testVtId, "Modifier");
+                        var r8bDocs = new List<VesselTypePartMappingDocument>();
+                        using (var it = vtpContainer.GetItemQueryIterator<VesselTypePartMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.VesselTypeId = @vtid AND c.PartName = 'R8b 60Char Part'").WithParameter("@vtid", testVtId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testVtId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                r8bDocs.AddRange(r);
+                                foreach (var d in r) trackedVtp.Add((d.id, testVtId));
+                            }
+                        }
+                        bool r8bOk = r8bRes && r8bDocs.Count == 1 && r8bDocs[0].CreatedBy == r8bUser60;
+                        writeSteps.Add(new { step = "CreateReportPart.R8bCreatedBy60CharsInsert", passed = r8bOk });
+                        if (!r8bOk) allPassed = false;
+
+                        // k) R8d: error in MERGE 1 still runs MERGE 2, method returns false (T6)
+                        var r8dConfig = new VesselTypeReportConfigList
+                        {
+                            reportParts = new List<VesselTypePartMapping>
+                            {
+                                new VesselTypePartMapping
+                                {
+                                    vesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = new string('Z', 110), // MERGE 1 fails
+                                    SequenceNo = 99,
+                                    IsActive = true
+                                }
+                            },
+                            normalSectionMappings = new List<VesselTypeSectionMapping>
+                            {
+                                new VesselTypeSectionMapping
+                                {
+                                    VesselTypeNormalSectionMappingId = Guid.Empty,
+                                    VesselTypePartMappingId = 0,
+                                    VesselTypeId = testVtId,
+                                    PartName = testNewPartName,
+                                    SectionName = "R8d Valid Section",
+                                    SubHeader = "R8dSub",
+                                    TotalCards = 3,
+                                    IsActive = true,
+                                    CreatedBy = "R8dTester"
+                                }
+                            }
+                        };
+                        var r8dRes = await cosmosReportPartRepo.CreateReportPart(r8dConfig, testVtId, "Modifier");
+                        var r8dSections = new List<VesselTypeNormalSectionMappingDocument>();
+                        using (var it = vnsContainer.GetItemQueryIterator<VesselTypeNormalSectionMappingDocument>(new QueryDefinition("SELECT * FROM c WHERE c.VesselTypeId = @vtid AND c.SectionName = 'R8d Valid Section'").WithParameter("@vtid", testVtId), requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey((double)testVtId) }))
+                        {
+                            while (it.HasMoreResults)
+                            {
+                                var r = await it.ReadNextAsync();
+                                r8dSections.AddRange(r);
+                                foreach (var d in r) trackedVns.Add((d.id, testVtId));
+                            }
+                        }
+                        bool r8dOk = !r8dRes && r8dSections.Count == 1;
+                        writeSteps.Add(new { step = "CreateReportPart.R8dMerge1FailMerge2Runs", passed = r8dOk, returnsFalse = !r8dRes, sectionCreated = r8dSections.Count == 1 });
+                        if (!r8dOk) allPassed = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        allPassed = false;
+                        writeSteps.Add(new { step = "WriteException", passed = false, error = ex.ToString() });
+                    }
+                    finally
+                    {
+                        // Clean up EXACT tracked items only
+                        foreach (var item in trackedRp)
+                            await TryCleanup($"ReportPart({item.id})", () => rpContainer.DeleteItemAsync<ReportPartDocument>(item.id, new PartitionKey(item.partitionKey)));
+                        foreach (var item in trackedPsm)
+                            await TryCleanup($"ProjectSectionMapping({item.id})", () => psmContainer.DeleteItemAsync<ProjectSectionMappingDocument>(item.id, new PartitionKey(item.partitionKey)));
+                        foreach (var item in trackedPts)
+                            await TryCleanup($"ProjectTankSection({item.id})", () => ptsContainer.DeleteItemAsync<ProjectTankSectionMappingDocument>(item.id, new PartitionKey(item.partitionKey)));
+                        foreach (var id in trackedPsub)
+                            await TryCleanup($"ProjectSubSection({id})", () => psubContainer.DeleteItemAsync<ProjectSubSectionDocument>(id, new PartitionKey(id)));
+                        foreach (var id in trackedPsd)
+                            await TryCleanup($"ProjectSectionDescription({id})", () => psdContainer.DeleteItemAsync<ProjectSectionDescriptionMappingDocument>(id, new PartitionKey(id)));
+                        foreach (var id in trackedPsdSub)
+                            await TryCleanup($"ProjectSubSectionDescription({id})", () => psdSubContainer.DeleteItemAsync<ProjectSubSectionDescriptionMappingDocument>(id, new PartitionKey(id)));
+                        foreach (var id in trackedPsg)
+                            await TryCleanup($"ProjectSectionGrading({id})", () => psgContainer.DeleteItemAsync<ProjectSectionGradingMappingDocument>(id, new PartitionKey(id)));
+
+                        foreach (var item in trackedVtp)
+                            await TryCleanup($"VesselTypePart({item.id})", () => vtpContainer.DeleteItemAsync<VesselTypePartMappingDocument>(item.id, new PartitionKey(item.partitionKey)));
+                        foreach (var item in trackedVns)
+                            await TryCleanup($"VesselTypeNormalSection({item.id})", () => vnsContainer.DeleteItemAsync<VesselTypeNormalSectionMappingDocument>(item.id, new PartitionKey(item.partitionKey)));
+                        foreach (var item in trackedVts)
+                            await TryCleanup($"VesselTypeTankSection({item.id})", () => vtsContainer.DeleteItemAsync<VesselTypeTankSectionMappingDocument>(item.id, new PartitionKey(item.partitionKey)));
+                        foreach (var id in trackedVsub)
+                            await TryCleanup($"VesselTypeSubSection({id})", () => vsubContainer.DeleteItemAsync<VesselTypeSubSectionDocument>(id, new PartitionKey(id)));
+                        foreach (var id in trackedVsubDesc)
+                            await TryCleanup($"VesselTypeSubSectionDescription({id})", () => vsubDescContainer.DeleteItemAsync<VesselTypeSubSectionDescriptionMappingDocument>(id, new PartitionKey(id)));
+                        foreach (var id in trackedVsd)
+                            await TryCleanup($"VesselTypeSectionDescription({id})", () => vsdContainer.DeleteItemAsync<VesselTypeSectionDescriptionMappingDocument>(id, new PartitionKey(id)));
+                        foreach (var id in trackedVsg)
+                            await TryCleanup($"VesselTypeSectionGrading({id})", () => vsgContainer.DeleteItemAsync<VesselTypeSectionGradingMappingDocument>(id, new PartitionKey(id)));
+                    }
+
+                    if (cleanupErrors.Count > 0)
+                    {
+                        allPassed = false;
+                        writeSteps.Add(new { step = "CleanupErrors", passed = false, errors = cleanupErrors });
+                    }
+                }
+
+                allPassed = allPassed && !hadException && checks.All(c =>
+                {
+                    var prop = c.GetType().GetProperty("equal") ?? c.GetType().GetProperty("match") ?? c.GetType().GetProperty("allMatch");
+                    if (prop != null)
+                    {
+                        var val = prop.GetValue(c);
+                        if (val is bool b) return b;
+                    }
+                    var errProp = c.GetType().GetProperty("error");
+                    if (errProp != null) return false;
+                    return true;
+                });
+
+                return Results.Ok(new
+                {
+                    batch = 8,
+                    allPassed,
+                    checksCount = checks.Count,
+                    checks,
+                    writeSteps
+                });
             }).AllowAnonymous();
         }
     }
