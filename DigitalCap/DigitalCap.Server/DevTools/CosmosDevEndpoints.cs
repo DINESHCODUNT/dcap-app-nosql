@@ -7694,7 +7694,13 @@ namespace DigitalCap.Server.DevTools
                 {
                     if (!d1.HasValue && !d2.HasValue) return true;
                     if (!d1.HasValue || !d2.HasValue) return false;
-                    return Math.Abs((d1.Value - d2.Value).TotalMilliseconds) < 1000;
+                    return Math.Abs((d1.Value - d2.Value).TotalMilliseconds) < 4;
+                }
+
+                static bool ApproxNowDateEquals(DateTime? actual, DateTime expected, double maxSeconds = 10)
+                {
+                    if (!actual.HasValue) return false;
+                    return Math.Abs((actual.Value - expected).TotalSeconds) <= maxSeconds;
                 }
 
                 static bool CompareHIReports(HandIReport? s, HandIReport? c)
@@ -7739,7 +7745,9 @@ namespace DigitalCap.Server.DevTools
                         && s.ScouringOrPitting == c.ScouringOrPitting
                         && s.BottomPlattingScouringOrPitting == c.BottomPlattingScouringOrPitting
                         && s.IsActive == c.IsActive
-                        && s.IsDeleted == c.IsDeleted;
+                        && s.IsDeleted == c.IsDeleted
+                        && ApproxDateEquals(s.CreatedDttm, c.CreatedDttm)
+                        && ApproxDateEquals(s.UpdatedDttm, c.UpdatedDttm);
                 }
 
                 // =========================================================================
@@ -7834,7 +7842,7 @@ namespace DigitalCap.Server.DevTools
                             .OrderBy(x => x.Id).ThenBy(x => x.ImageId).ToList();
                         var cosH = cosBulk.Select(b => new { b.Id, b.ImageId, b.ProjectId, Len = b.Base64String?.Length ?? 0, Hash = ComputeSha256(b.Base64String), b.CreateDttm, b.UpdateDttm })
                             .OrderBy(x => x.Id).ThenBy(x => x.ImageId).ToList();
-                        bulkEq = sqlH.Zip(cosH).All(p => p.First.Id == p.Second.Id && p.First.ImageId == p.Second.ImageId && p.First.Len == p.Second.Len && p.First.Hash == p.Second.Hash
+                        bulkEq = sqlH.Zip(cosH).All(p => p.First.Id == p.Second.Id && p.First.ImageId == p.Second.ImageId && p.First.ProjectId == p.Second.ProjectId && p.First.Len == p.Second.Len && p.First.Hash == p.Second.Hash
                             && ApproxDateEquals(p.First.CreateDttm, p.Second.CreateDttm) && ApproxDateEquals(p.First.UpdateDttm, p.Second.UpdateDttm));
                     }
                     if (sqlBulk.Count > 0) methodPositiveRows["GetBulkUploadUnplacedImages"] += sqlBulk.Count;
@@ -7963,7 +7971,9 @@ namespace DigitalCap.Server.DevTools
                             cardsEq = sOrder.Zip(cOrder).All(p => p.First.Id == p.Second.Id
                                 && p.First.SectionId == p.Second.SectionId
                                 && string.Equals(p.First.FileName?.TrimEnd(' '), p.Second.FileName?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
-                                && p.First.CurrentCondition == p.Second.CurrentCondition);
+                                && p.First.CurrentCondition == p.Second.CurrentCondition
+                                && p.First.IsDescDropdown == p.Second.IsDescDropdown
+                                && string.Equals(p.First.Description?.TrimEnd(' '), p.Second.Description?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
                         }
                         if (sqlCards.Count > 0) methodPositiveRows["GetImageCard"] += sqlCards.Count;
                         checks.Add(new { method = "GetImageCard", templateId = tid, equal = cardsEq, sqlCount = sqlCards.Count, cosmosCount = cosCards.Count });
@@ -8013,11 +8023,14 @@ namespace DigitalCap.Server.DevTools
                     }
                 }
 
-                // Dedicated GetHIReport check on projects with H&I reports (T8, T9)
+                // Dedicated GetHIReport check on projects with H&I reports (T8, T9, P5)
                 List<int> hiProjectIds = new List<int>();
+                int? inactiveOnlyPid = null;
                 try
                 {
-                    hiProjectIds = (await conn.QueryAsync<int>("SELECT DISTINCT ProjectId FROM [dbo].[H_IReportTemplate] WHERE ProjectId IS NOT NULL AND IsDeleted = 0")).ToList();
+                    hiProjectIds = (await conn.QueryAsync<int>("SELECT DISTINCT ProjectId FROM [dbo].[H_IReportTemplate] WHERE ProjectId IS NOT NULL AND IsActive = 1 AND IsDeleted = 0")).ToList();
+                    inactiveOnlyPid = await conn.QueryFirstOrDefaultAsync<int?>(
+                        "SELECT TOP 1 ProjectId FROM [dbo].[H_IReportTemplate] WHERE ProjectId IS NOT NULL AND IsActive = 0 AND IsDeleted = 0 AND ProjectId NOT IN (SELECT ProjectId FROM [dbo].[H_IReportTemplate] WHERE IsActive = 1 AND IsDeleted = 0)");
                 }
                 catch (Exception ex)
                 {
@@ -8045,6 +8058,24 @@ namespace DigitalCap.Server.DevTools
                     {
                         hadException = true;
                         checks.Add(new { method = "GetHIReport", projectId = pid, equal = false, error = ex.Message });
+                    }
+                }
+
+                if (inactiveOnlyPid.HasValue)
+                {
+                    try
+                    {
+                        var sqlInact = await sqlRepo.GetHIReport(inactiveOnlyPid.Value);
+                        var cosInact = await cosmosRepo.GetHIReport(inactiveOnlyPid.Value);
+                        bool inactEq = sqlInact == null && cosInact == null;
+                        checks.Add(new { method = "GetHIReport.InactiveOnlyProject", projectId = inactiveOnlyPid.Value, equal = inactEq, sqlNull = (sqlInact == null), cosNull = (cosInact == null) });
+                        if (!inactEq) allPassed = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        hadException = true;
+                        allPassed = false;
+                        checks.Add(new { method = "GetHIReport.InactiveOnlyProject", projectId = inactiveOnlyPid.Value, equal = false, error = ex.Message });
                     }
                 }
 
@@ -8102,24 +8133,48 @@ namespace DigitalCap.Server.DevTools
                         checks.Add(new { method = "GetProjectReportTemplate.2Args", projectId = pid, templateId = tid, equal = false, error = ex.Message });
                     }
 
-                    // GetTemplatGradings (T10: ordered by SqlGuid SectionId then LabelName; rows with the same key compare as a set)
+                    // GetTemplatGradings (T10, P1, P2: ordered by SqlGuid SectionId then LabelName; rows with the same key compare as a set)
                     try
                     {
                         var sqlTg = await sqlRepo.GetTemplatGradings(tid, pid);
                         var cosTg = await cosmosRepo.GetTemplatGradings(tid, pid);
-                        bool tgEq = sqlTg.Count == cosTg.Count;
-                        if (tgEq && sqlTg.Count > 0)
+                        bool tgEq = sqlTg.Count > 0 && sqlTg.Count == cosTg.Count;
+                        if (tgEq)
                         {
-                            var sqlGroups = sqlTg.GroupBy(x => (x.SectionId, Label: x.LabelName?.TrimEnd(' ')))
-                                .ToDictionary(g => g.Key, g => g.Select(x => x.Id).OrderBy(id => id).ToList());
-                            var cosGroups = cosTg.GroupBy(x => (x.SectionId, Label: x.LabelName?.TrimEnd(' ')))
-                                .ToDictionary(g => g.Key, g => g.Select(x => x.Id).OrderBy(id => id).ToList());
-                            if (sqlGroups.Count != cosGroups.Count) tgEq = false;
+                            static List<(Guid SectionId, string? Label, HashSet<int> Ids)> GroupConsecutive(List<GradingUI> list)
+                            {
+                                var groups = new List<(Guid SectionId, string? Label, HashSet<int> Ids)>();
+                                foreach (var item in list)
+                                {
+                                    var label = item.LabelName?.TrimEnd(' ');
+                                    if (groups.Count > 0)
+                                    {
+                                        var last = groups[groups.Count - 1];
+                                        if (new System.Data.SqlTypes.SqlGuid(last.SectionId).Equals(new System.Data.SqlTypes.SqlGuid(item.SectionId))
+                                            && string.Equals(last.Label, label, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            last.Ids.Add(item.Id);
+                                            continue;
+                                        }
+                                    }
+                                    groups.Add((item.SectionId, label, new HashSet<int> { item.Id }));
+                                }
+                                return groups;
+                            }
+
+                            var sqlGroups = GroupConsecutive(sqlTg);
+                            var cosGroups = GroupConsecutive(cosTg);
+                            if (sqlGroups.Count != cosGroups.Count)
+                            {
+                                tgEq = false;
+                            }
                             else
                             {
-                                foreach (var kvp in sqlGroups)
+                                for (int gi = 0; gi < sqlGroups.Count; gi++)
                                 {
-                                    if (!cosGroups.TryGetValue(kvp.Key, out var cList) || !kvp.Value.SequenceEqual(cList))
+                                    if (!new System.Data.SqlTypes.SqlGuid(sqlGroups[gi].SectionId).Equals(new System.Data.SqlTypes.SqlGuid(cosGroups[gi].SectionId))
+                                        || !string.Equals(sqlGroups[gi].Label, cosGroups[gi].Label, StringComparison.OrdinalIgnoreCase)
+                                        || !sqlGroups[gi].Ids.SetEquals(cosGroups[gi].Ids))
                                     {
                                         tgEq = false;
                                         break;
@@ -8136,13 +8191,13 @@ namespace DigitalCap.Server.DevTools
                         checks.Add(new { method = "GetTemplatGradings", projectId = pid, templateId = tid, equal = false, error = ex.Message });
                     }
 
-                    // GetGradingCondition
+                    // GetGradingCondition (P1: 0 == 0 must be equal=false)
                     try
                     {
                         var sqlGc = await sqlRepo.GetGradingCondition(tid, pid);
                         var cosGc = await cosmosRepo.GetGradingCondition(tid, pid);
-                        bool gcEq = sqlGc.Count == cosGc.Count;
-                        if (gcEq && sqlGc.Count > 0)
+                        bool gcEq = sqlGc.Count > 0 && sqlGc.Count == cosGc.Count;
+                        if (gcEq)
                         {
                             var sOrder = sqlGc.OrderBy(x => x.Id).ThenBy(x => x.GradingId).ThenBy(x => x.SectionId).ToList();
                             var cOrder = cosGc.OrderBy(x => x.Id).ThenBy(x => x.GradingId).ThenBy(x => x.SectionId).ToList();
@@ -8382,7 +8437,12 @@ namespace DigitalCap.Server.DevTools
                                 && sqlCbyId.SectionId == cosCbyId.SectionId
                                 && sqlCbyId.CardId == cosCbyId.CardId
                                 && sqlCbyId.DescriptionId == cosCbyId.DescriptionId
-                                && sqlCbyId.ImageId == cosCbyId.ImageId;
+                                && sqlCbyId.ImageId == cosCbyId.ImageId
+                                && string.Equals(sqlCbyId.AdditionalDescription?.TrimEnd(' '), cosCbyId.AdditionalDescription?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                && sqlCbyId.CurrentCondition == cosCbyId.CurrentCondition
+                                && sqlCbyId.IsDeleted == cosCbyId.IsDeleted
+                                && ApproxDateEquals(sqlCbyId.CreatedDttm, cosCbyId.CreatedDttm)
+                                && ApproxDateEquals(sqlCbyId.UpdateDttm, cosCbyId.UpdateDttm);
                             if (sqlCbyId != null) methodPositiveRows["GetProjectImagCardById"]++;
                             checks.Add(new { method = "GetProjectImagCardById", projectId = cRow.ProjectId, templateId = cRow.TemplateId, sectionId = cRow.SectionId, cardId = cRow.CardId, equal = cbyIdEq });
                         }
@@ -8434,7 +8494,7 @@ namespace DigitalCap.Server.DevTools
                         var preBu = await SafeQueryAsync<BulkUploadDocument>(buContainer, "SELECT * FROM c WHERE c.imageid = -99988");
                         var preCl = await SafeQueryAsync<CapLogDocument>(clContainer, "SELECT * FROM c WHERE c.AbsProjectId = '-999'");
                         var preId = await SafeQueryAsync<ImageDataDocument>(idContainer, "SELECT * FROM c WHERE c.ImageId IN (-99901, -99921)");
-                        var preImg = await SafeQueryAsync<ImagesDocument>(imgContainer, "SELECT * FROM c WHERE c.AssignmentId IN ('DupAssign', 'DelAssign') OR c.Id IN (-99911, -99912, -99921)");
+                        var preImg = await SafeQueryAsync<ImagesDocument>(imgContainer, "SELECT * FROM c WHERE c.AssignmentId IN ('DupAssign', 'DelAssign', 'Assign1', 'Assign2') OR c.Id IN (-99911, -99912, -99921)");
 
                         bool preCheckPassed = prePtm.Count == 0 && prePic.Count == 0 && prePgm.Count == 0 && prePgcm.Count == 0
                             && preHi.Count == 0 && preTic.Count == 0 && preGic.Count == 0 && preHipg.Count == 0 && preHipgc.Count == 0
@@ -8444,9 +8504,13 @@ namespace DigitalCap.Server.DevTools
                             ptm = prePtm.Count, pic = prePic.Count, pgm = prePgm.Count, pgcm = prePgcm.Count,
                             hi = preHi.Count, tic = preTic.Count, gic = preGic.Count, hipg = preHipg.Count, hipgc = preHipgc.Count,
                             bu = preBu.Count, cl = preCl.Count, id = preId.Count, img = preImg.Count });
-                        if (!preCheckPassed) allPassed = false;
-
-                        // 2.1 CreateProjectTemplate -> false and nothing written (Trap 1, T6)
+                        if (!preCheckPassed)
+                        {
+                            allPassed = false;
+                        }
+                        else
+                        {
+                        // 2.1 CreateProjectTemplate -> false and nothing written (Trap 1, T6, P6)
                         var ptmCountBefore = (await SafeQueryAsync<ProjectTemplateMappingDocument>(ptmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
                         var ptmTest = new ProjectReportMapping
                         {
@@ -8457,6 +8521,11 @@ namespace DigitalCap.Server.DevTools
                         };
                         var cptRes = await cosmosRepo.CreateProjectTemplate(ptmTest);
                         var ptmCountAfter = (await SafeQueryAsync<ProjectTemplateMappingDocument>(ptmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        if (ptmCountAfter > ptmCountBefore)
+                        {
+                            var leakedPtm = await SafeQueryAsync<ProjectTemplateMappingDocument>(ptmContainer, "SELECT * FROM c WHERE c.ProjectId = -999");
+                            foreach (var d in leakedPtm) cleanupList.Add((ptmContainer, d.id, new PartitionKey((double)testPid)));
+                        }
                         bool cptPassed = !cptRes && ptmCountBefore == ptmCountAfter && ptmCountAfter == 0;
                         writeSteps.Add(new { step = "CreateProjectTemplate.Trap1", passed = cptPassed, returned = cptRes, ptmCountBefore, ptmCountAfter });
 
@@ -8480,12 +8549,12 @@ namespace DigitalCap.Server.DevTools
                             foreach (var d in leaked) cleanupList.Add((picContainer, d.id, new PartitionKey((double)testPid)));
                         }
 
-                        // (b) 0 / "" / 1900-01-01
+                        // (b) 0 / "" / 1900-01-01 (T7, P7)
                         var testSecGuid = Guid.NewGuid();
                         var picNormal = new ProjectCardMapping
                         {
-                            ProjectId = testPid,
-                            TemplateId = testTid,
+                            ProjectId = 0,
+                            TemplateId = 0,
                             SectionId = testSecGuid,
                             CardId = 0,
                             DescriptionId = 0,
@@ -8499,12 +8568,15 @@ namespace DigitalCap.Server.DevTools
                         var picRes1 = await cosmosRepo.CreateProjectImageCard(picNormal);
                         var readPics = await SafeQueryAsync<ProjectImageCardsDocument>(
                             picContainer,
-                            "SELECT * FROM c WHERE c.ProjectId = -999 AND c.TemplateId = -999",
-                            new PartitionKey((double)-999));
+                            $"SELECT * FROM c WHERE c.SectionId = '{testSecGuid.ToString().ToLowerInvariant()}'");
                         var picDoc1 = readPics.FirstOrDefault();
-                        if (picDoc1 != null) cleanupList.Add((picContainer, picDoc1.id, new PartitionKey((double)testPid)));
+                        if (picDoc1 != null) cleanupList.Add((picContainer, picDoc1.id, PartitionKey.Null));
 
                         bool picNormOk = picRes1 && picDoc1 != null
+                            && picDoc1.ProjectId == null
+                            && picDoc1.TemplateId == null
+                            && string.Equals(picDoc1.SectionId, testSecGuid.ToString().ToLowerInvariant(), StringComparison.OrdinalIgnoreCase)
+                            && picDoc1.IsDeleted == false
                             && picDoc1.CardId == null
                             && picDoc1.DescriptionId == null
                             && picDoc1.AdditionalDescription == null
@@ -8542,16 +8614,30 @@ namespace DigitalCap.Server.DevTools
                             && string.Equals(pic0PointRead.SectionId, testSecGuid0.ToString().ToLowerInvariant(), StringComparison.OrdinalIgnoreCase)
                             && pic0PointRead.IsDeleted == false;
 
-                        // (d) UpdateProjectImageCard -> CardId/UpdateDttm (T7), CreatedDttm NULL; new ProjectId -> partition move
+                        // (d) UpdateProjectImageCard -> MinValue rejected (P6), CardId/UpdateDttm (T7), CreatedDttm NULL; new ProjectId -> partition move
                         bool picUpdateOk = false;
                         if (picDoc1 != null)
                         {
+                            // P6: MinValue on UpdateProjectImageCard
+                            var upMinModel = new ProjectCardMapping
+                            {
+                                Id = picDoc1.Id,
+                                ProjectId = 0,
+                                TemplateId = 0,
+                                SectionId = testSecGuid,
+                                CardId = 99,
+                                UpdateDttm = DateTime.MinValue
+                            };
+                            var upMinRes = await cosmosRepo.UpdateProjectImageCard(upMinModel);
+                            var readBackMin = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, PartitionKey.Null);
+                            bool upMinOk = !upMinRes && readBackMin != null && readBackMin.CardId == null;
+
                             var nowUtc = DateTime.UtcNow;
                             var updateModel = new ProjectCardMapping
                             {
                                 Id = picDoc1.Id,
-                                ProjectId = testPid,
-                                TemplateId = testTid,
+                                ProjectId = 0,
+                                TemplateId = 0,
                                 SectionId = testSecGuid,
                                 CardId = 55,
                                 AdditionalDescription = "UpdatedDesc",
@@ -8559,28 +8645,48 @@ namespace DigitalCap.Server.DevTools
                                 IsDeleted = false
                             };
                             var upRes = await cosmosRepo.UpdateProjectImageCard(updateModel);
-                            var readBackUp = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, new PartitionKey((double)testPid));
+                            var readBackUp = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, PartitionKey.Null);
                             bool upFieldOk = upRes && readBackUp != null
                                 && readBackUp.CardId == 55
-                                && ApproxDateEquals(readBackUp.UpdateDttm, nowUtc)
+                                && ApproxNowDateEquals(readBackUp.UpdateDttm, nowUtc)
                                 && readBackUp.AdditionalDescription == "UpdatedDesc"
                                 && readBackUp.CreatedDttm == null;
 
                             // Partition move to -998
                             updateModel.ProjectId = -998;
                             var moveRes = await cosmosRepo.UpdateProjectImageCard(updateModel);
-                            var oldRead = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, new PartitionKey((double)testPid));
+                            var oldRead = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, PartitionKey.Null);
                             var newRead = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, picDoc1.id, new PartitionKey((double)-998));
                             if (newRead != null) cleanupList.Add((picContainer, picDoc1.id, new PartitionKey((double)-998)));
                             bool moveOk = moveRes && oldRead == null && newRead != null && newRead.ProjectId == -998;
 
-                            picUpdateOk = upFieldOk && moveOk;
+                            picUpdateOk = upMinOk && upFieldOk && moveOk;
                         }
 
                         bool allPicOk = minDateOk && picNormOk && pic0Ok && picUpdateOk;
                         writeSteps.Add(new { step = "CreateAndUpdateProjectImageCard.Trap2_3_4_7", passed = allPicOk, minDateOk, picNormOk, pic0Ok, picUpdateOk });
 
-                        // 2.3 CreateProjectGrading + UpdateProjectGrading (read back: Value transformed, RequiredInReport NULL)
+                        // 2.3 CreateProjectGrading + UpdateProjectGrading (P6: MinValue, T7: Value transformed, RequiredInReport NULL)
+                        var pgmBeforeCount = (await SafeQueryAsync<ProjectGradingMappingDocument>(pgmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        var pgmMinModel = new ProjectGradingMapping
+                        {
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = Guid.NewGuid(),
+                            GradingId = 902,
+                            Value = "val",
+                            CreatedDttm = DateTime.MinValue,
+                            UpdateDttm = DateTime.UtcNow
+                        };
+                        var cpgMinRes = await cosmosRepo.CreateProjectGrading(pgmMinModel);
+                        var pgmAfterCount = (await SafeQueryAsync<ProjectGradingMappingDocument>(pgmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        if (pgmAfterCount > pgmBeforeCount)
+                        {
+                            var leakedPgm = await SafeQueryAsync<ProjectGradingMappingDocument>(pgmContainer, "SELECT * FROM c WHERE c.ProjectId = -999");
+                            foreach (var d in leakedPgm) cleanupList.Add((pgmContainer, d.id, new PartitionKey((double)testPid)));
+                        }
+                        bool cpgMinOk = !cpgMinRes && pgmBeforeCount == pgmAfterCount;
+
                         var pgmSecGuid = Guid.NewGuid();
                         var pgmModel = new ProjectGradingMapping
                         {
@@ -8603,13 +8709,27 @@ namespace DigitalCap.Server.DevTools
 
                         var pgmList = await cosmosRepo.GetProjectGrading(testPid, testTid, pgmSecGuid);
                         var readPgmItem = pgmList?.FirstOrDefault();
-                        bool cpgOk = cpgRes && pgmDoc != null && pgmDoc.RequiredInReport == null
+                        bool cpgOk = cpgMinOk && cpgRes && pgmDoc != null && pgmDoc.RequiredInReport == null
                             && readPgmItem != null && readPgmItem.Value == "1234567890 123456789";
 
-                        // UpdateProjectGrading
+                        // UpdateProjectGrading (P6: MinValue rejected, doc unchanged)
                         bool upgOk = false;
                         if (pgmDoc != null)
                         {
+                            var upgMinModel = new ProjectGradingMapping
+                            {
+                                Id = pgmDoc.Id,
+                                ProjectId = testPid,
+                                TemplateId = testTid,
+                                SectionId = pgmSecGuid,
+                                GradingId = 901,
+                                Value = "ShouldNotUpdate",
+                                UpdateDttm = DateTime.MinValue
+                            };
+                            var upgMinRes = await cosmosRepo.UpdateProjectGrading(upgMinModel);
+                            var readPgmMinDoc = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgmDoc.id, new PartitionKey((double)testPid));
+                            bool upgMinOk = !upgMinRes && readPgmMinDoc != null && readPgmMinDoc.Value == "12345678901234567890";
+
                             var upgModel = new ProjectGradingMapping
                             {
                                 Id = pgmDoc.Id,
@@ -8623,13 +8743,34 @@ namespace DigitalCap.Server.DevTools
                             };
                             var upgRes = await cosmosRepo.UpdateProjectGrading(upgModel);
                             var readPgmDoc2 = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgmDoc.id, new PartitionKey((double)testPid));
-                            upgOk = upgRes && readPgmDoc2 != null && readPgmDoc2.Value == "NewVal" && readPgmDoc2.CreatedDttm == null && readPgmDoc2.RequiredInReport == null;
+                            upgOk = upgMinOk && upgRes && readPgmDoc2 != null && readPgmDoc2.Value == "NewVal" && readPgmDoc2.CreatedDttm == null && readPgmDoc2.RequiredInReport == null;
                         }
 
                         bool allPgmOk = cpgOk && upgOk;
                         writeSteps.Add(new { step = "CreateAndUpdateProjectGrading.Trap2_6_25", passed = allPgmOk, cpgOk, upgOk });
 
-                        // 2.4 CreateProjectGradingConditionMapping + UpdateProjectGradingConditionMapping (T7: GradingConditionValue true/false)
+                        // 2.4 CreateProjectGradingConditionMapping + UpdateProjectGradingConditionMapping (P6: MinValue, T7: GradingConditionValue true/false)
+                        var pgcmBeforeCount = (await SafeQueryAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        var pgcmMinModel = new ProjectGradingConditionMapping
+                        {
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = Guid.NewGuid(),
+                            GradingId = 902,
+                            GradingConditionLabel = "Min",
+                            GradingConditionValue = true,
+                            CreatedDttm = DateTime.MinValue,
+                            UpdateDttm = DateTime.UtcNow
+                        };
+                        var cpgcmMinRes = await cosmosRepo.CreateProjectGradingConditionMapping(pgcmMinModel);
+                        var pgcmAfterCount = (await SafeQueryAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        if (pgcmAfterCount > pgcmBeforeCount)
+                        {
+                            var leakedPgcm = await SafeQueryAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, "SELECT * FROM c WHERE c.ProjectId = -999");
+                            foreach (var d in leakedPgcm) cleanupList.Add((pgcmContainer, d.id, new PartitionKey((double)testPid)));
+                        }
+                        bool cpgcmMinOk = !cpgcmMinRes && pgcmBeforeCount == pgcmAfterCount;
+
                         var pgcmSecGuid = Guid.NewGuid();
                         var pgcmModel = new ProjectGradingConditionMapping
                         {
@@ -8651,11 +8792,25 @@ namespace DigitalCap.Server.DevTools
                         var pgcmDoc = readPgcmDocs.FirstOrDefault();
                         if (pgcmDoc != null) cleanupList.Add((pgcmContainer, pgcmDoc.id, new PartitionKey((double)testPid)));
 
-                        bool cpgcmOk = cpgcmRes && pgcmDoc != null && pgcmDoc.GradingConditionLabel == "InitialLabel" && pgcmDoc.GradingConditionValue == true;
+                        bool cpgcmOk = cpgcmMinOk && cpgcmRes && pgcmDoc != null && pgcmDoc.GradingConditionLabel == "InitialLabel" && pgcmDoc.GradingConditionValue == true;
 
                         bool upgcmOk = false;
                         if (pgcmDoc != null)
                         {
+                            var upgcmMinModel = new ProjectGradingConditionMapping
+                            {
+                                Id = pgcmDoc.Id,
+                                ProjectId = testPid,
+                                TemplateId = testTid,
+                                SectionId = pgcmSecGuid,
+                                GradingId = 901,
+                                GradingConditionLabel = "ShouldNotUpdate",
+                                UpdateDttm = DateTime.MinValue
+                            };
+                            var upgcmMinRes = await cosmosRepo.UpdateProjectGradingConditionMapping(upgcmMinModel);
+                            var readPgcmMinDoc = await SafeReadAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, pgcmDoc.id, new PartitionKey((double)testPid));
+                            bool upgcmMinOk = !upgcmMinRes && readPgcmMinDoc != null && readPgcmMinDoc.GradingConditionLabel == "InitialLabel";
+
                             var upgcmModel = new ProjectGradingConditionMapping
                             {
                                 Id = pgcmDoc.Id,
@@ -8670,13 +8825,13 @@ namespace DigitalCap.Server.DevTools
                             };
                             var upgcmRes = await cosmosRepo.UpdateProjectGradingConditionMapping(upgcmModel);
                             var readPgcmDoc2 = await SafeReadAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, pgcmDoc.id, new PartitionKey((double)testPid));
-                            upgcmOk = upgcmRes && readPgcmDoc2 != null && readPgcmDoc2.GradingConditionLabel == "UpdatedLabel" && readPgcmDoc2.GradingConditionValue == false && readPgcmDoc2.CreatedDttm == null;
+                            upgcmOk = upgcmMinOk && upgcmRes && readPgcmDoc2 != null && readPgcmDoc2.GradingConditionLabel == "UpdatedLabel" && readPgcmDoc2.GradingConditionValue == false && readPgcmDoc2.CreatedDttm == null;
                         }
 
                         bool allPgcmOk = cpgcmOk && upgcmOk;
                         writeSteps.Add(new { step = "CreateAndUpdateProjectGradingConditionMapping.Trap2_7", passed = allPgcmOk, cpgcmOk, upgcmOk });
 
-                        // 2.5 UpdateProjectTemplate on a directly created test document
+                        // 2.5 UpdateProjectTemplate on a directly created test document (P6: MinValue)
                         var testPtmId = Guid.NewGuid().ToString().ToLowerInvariant();
                         var testPtmDoc = new ProjectTemplateMappingDocument
                         {
@@ -8693,6 +8848,19 @@ namespace DigitalCap.Server.DevTools
                         await ptmContainer.CreateItemAsync(testPtmDoc, new PartitionKey((double)testPid));
                         cleanupList.Add((ptmContainer, testPtmId, new PartitionKey((double)testPid)));
 
+                        var uptMinModel = new ProjectReportMapping
+                        {
+                            Id = Guid.Parse(testPtmId),
+                            ProjectId = testPid,
+                            TemplateId = testTid,
+                            SectionId = Guid.Parse(testPtmDoc.SectionId!),
+                            Notes = "ShouldNotUpdate",
+                            UpdateDttm = DateTime.MinValue
+                        };
+                        var uptMinRes = await cosmosRepo.UpdateProjectTemplate(uptMinModel);
+                        var readPtmMinBack = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, testPtmId, new PartitionKey((double)testPid));
+                        bool uptMinOk = !uptMinRes && readPtmMinBack != null && readPtmMinBack.Notes == "InitialNotes";
+
                         var uptModel = new ProjectReportMapping
                         {
                             Id = Guid.Parse(testPtmId),
@@ -8705,33 +8873,122 @@ namespace DigitalCap.Server.DevTools
                         };
                         var uptRes = await cosmosRepo.UpdateProjectTemplate(uptModel);
                         var readPtmBack = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, testPtmId, new PartitionKey((double)testPid));
-                        bool uptOk = uptRes && readPtmBack != null && readPtmBack.Notes == "UpdatedNotes" && readPtmBack.CreatedDttm == null;
+                        bool uptOk = uptMinOk && uptRes && readPtmBack != null && readPtmBack.Notes == "UpdatedNotes" && readPtmBack.CreatedDttm == null;
                         writeSteps.Add(new { step = "UpdateProjectTemplate.Trap2", passed = uptOk, uptRes, createdDttmNull = (readPtmBack?.CreatedDttm == null) });
 
-                        // 2.6 CreateHIReport + UpdateHIReport (T6, T7: read back fully, duplicate blocked, IsActive=false unchanged, OthersDescription seeded then NULL)
+                        // 2.6 CreateHIReport + UpdateHIReport (P6: MinValue, P7: all columns read back, Trap 19/20, T6, T7)
+                        var hiBeforeCount = (await SafeQueryAsync<H_IReportTemplateDocument>(hiContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        var hiMinModel = new HandIReport
+                        {
+                            Id = Guid.NewGuid(),
+                            ProjectId = testPid,
+                            CompanyName = "MinCompany",
+                            CreatedDttm = DateTime.MinValue,
+                            UpdatedDttm = DateTime.UtcNow
+                        };
+                        var chiMinRes = await cosmosRepo.CreateHIReport(hiMinModel);
+                        var hiAfterCount = (await SafeQueryAsync<H_IReportTemplateDocument>(hiContainer, "SELECT * FROM c WHERE c.ProjectId = -999")).Count;
+                        if (hiAfterCount > hiBeforeCount)
+                        {
+                            var leakedHi = await SafeQueryAsync<H_IReportTemplateDocument>(hiContainer, "SELECT * FROM c WHERE c.ProjectId = -999");
+                            foreach (var d in leakedHi) cleanupList.Add((hiContainer, d.id, new PartitionKey((double)testPid)));
+                        }
+                        bool chiMinOk = !chiMinRes && hiBeforeCount == hiAfterCount;
+
                         var testHiGuid = Guid.NewGuid();
                         var testHiIdStr = testHiGuid.ToString().ToLowerInvariant();
+                        var hiDateNow = DateTime.UtcNow;
                         var hiModel = new HandIReport
                         {
                             Id = testHiGuid,
                             ProjectId = testPid,
                             CompanyName = "InitialCompany",
+                            CertificateNumber = "CERT-001",
+                            ExpiryDate = hiDateNow.Date,
+                            ThicknessMeasurementA = "TMA",
+                            ThicknessMeasurementB = "TMB",
+                            ThicknessMeasurementC = "TMC",
+                            AdditionalSurveyorComments = "Surveyor Comments",
+                            MaintenanceExecuted = "Maintenance Executed",
+                            Accommodation = "Accommodation",
+                            PhotoGraphs = "Photos",
+                            OperationalTestLocation = "Test Location",
+                            OperationalTestStart = hiDateNow.Date,
+                            OperationalTestFinish = hiDateNow.Date.AddDays(1),
+                            OptionalTestSatisFactory = "Satisfactory",
+                            AssociatedReportNumber = "ARN-1",
+                            AssociatedReportDate = "2026-11-19",
+                            Remarks = "Test Remarks",
+                            LeadSurveyorName = "Lead Surv",
+                            LeadSurveyorNumber = "LS-01",
+                            SurveyorName = "Surv One",
+                            SurveyorNumber = "S-01",
+                            LastVisitDate = hiDateNow.Date,
+                            IndividualA = "Ind A",
+                            IndividualB = "Ind B",
+                            IndividualC = "Ind C",
+                            IndividualD = "Ind D",
+                            IndividualE = "Ind E",
+                            IndividualF = "Ind F",
+                            SubstantialCorrosionRemaining = "SCR-1",
+                            StatutoryDeficiencies = "SD-1",
+                            FoundSatisfactory = "FS-1",
+                            UnderRemarks = "UR-1",
+                            ScouringOrPitting = "SOP-1",
+                            BottomPlattingScouringOrPitting = "BPSOP-1",
                             IsActive = true,
                             IsDeleted = false,
-                            CreatedDttm = DateTime.UtcNow,
-                            UpdatedDttm = DateTime.UtcNow
+                            CreatedDttm = hiDateNow,
+                            UpdatedDttm = hiDateNow
                         };
                         var chiRes = await cosmosRepo.CreateHIReport(hiModel);
                         cleanupList.Add((hiContainer, testHiIdStr, new PartitionKey((double)testPid)));
 
-                        // Read back fully per T7
+                        // Read back fully per T7, P7 (all columns including CreatedDttm and UpdatedDttm)
                         var createdHiDoc = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, testHiIdStr, new PartitionKey((double)testPid));
                         bool chiReadBackOk = createdHiDoc != null
+                            && createdHiDoc.id == testHiIdStr
                             && createdHiDoc.Id == testHiIdStr
                             && createdHiDoc.ProjectId == testPid
                             && createdHiDoc.CompanyName == "InitialCompany"
+                            && createdHiDoc.CertificateNumber == "CERT-001"
+                            && createdHiDoc.ExpiryDate == hiDateNow.Date
+                            && createdHiDoc.ThicknessMeasurementA == "TMA"
+                            && createdHiDoc.ThicknessMeasurementB == "TMB"
+                            && createdHiDoc.ThicknessMeasurementC == "TMC"
+                            && createdHiDoc.AdditionalSurveyorComments == "Surveyor Comments"
+                            && createdHiDoc.MaintenanceExecuted == "Maintenance Executed"
+                            && createdHiDoc.Accommodation == "Accommodation"
+                            && createdHiDoc.PhotoGraphs == "Photos"
+                            && createdHiDoc.OperationalTestLocation == "Test Location"
+                            && createdHiDoc.OperationalTestStart == hiDateNow.Date
+                            && createdHiDoc.OperationalTestFinish == hiDateNow.Date.AddDays(1)
+                            && createdHiDoc.OptionalTestSatisFactory == "Satisfactory"
+                            && createdHiDoc.AssociatedReportNumber == "ARN-1"
+                            && createdHiDoc.AssociatedReportDate == "2026-11-19"
+                            && createdHiDoc.Remarks == "Test Remarks"
+                            && createdHiDoc.LeadSurveyorName == "Lead Surv"
+                            && createdHiDoc.LeadSurveyorNumber == "LS-01"
+                            && createdHiDoc.SurveyorName == "Surv One"
+                            && createdHiDoc.SurveyorNumber == "S-01"
+                            && createdHiDoc.LastVisitDate == hiDateNow.Date
+                            && createdHiDoc.IndividualA == "Ind A"
+                            && createdHiDoc.IndividualB == "Ind B"
+                            && createdHiDoc.IndividualC == "Ind C"
+                            && createdHiDoc.IndividualD == "Ind D"
+                            && createdHiDoc.IndividualE == "Ind E"
+                            && createdHiDoc.IndividualF == "Ind F"
+                            && createdHiDoc.SubstantialCorrosionRemaining == "SCR-1"
+                            && createdHiDoc.StatutoryDeficiencies == "SD-1"
+                            && createdHiDoc.FoundSatisfactory == "FS-1"
+                            && createdHiDoc.UnderRemarks == "UR-1"
+                            && createdHiDoc.ScouringOrPitting == "SOP-1"
+                            && createdHiDoc.BottomPlattingScouringOrPitting == "BPSOP-1"
                             && createdHiDoc.IsActive == true
-                            && createdHiDoc.IsDeleted == false;
+                            && createdHiDoc.IsDeleted == false
+                            && createdHiDoc.CreatedDttm == hiDateNow
+                            && createdHiDoc.UpdatedDttm == hiDateNow
+                            && createdHiDoc.OthersDescription == null;
 
                         // Duplicate Id in project -998 -> false (Trap 20, T6: count before = count after = 0)
                         var hi998Before = (await SafeQueryAsync<H_IReportTemplateDocument>(hiContainer, "SELECT * FROM c WHERE c.ProjectId = -998")).Count;
@@ -8761,6 +9018,20 @@ namespace DigitalCap.Server.DevTools
                         bool inactiveBlockedOk = !uhiInactiveRes && hiBeforeInactive != null && hiAfterInactive != null
                             && hiBeforeInactiveResp.ETag == hiAfterInactiveResp.ETag;
 
+                        // P6: UpdateHIReport with UpdatedDttm = DateTime.MinValue -> false, doc unchanged, same ETag
+                        var hiBeforeMinResp = await hiContainer.ReadItemAsync<H_IReportTemplateDocument>(testHiIdStr, new PartitionKey((double)testPid));
+                        var uhiMinModel = new HandIReport
+                        {
+                            Id = testHiGuid,
+                            ProjectId = testPid,
+                            CompanyName = "MinUpdateCompany",
+                            IsActive = true,
+                            UpdatedDttm = DateTime.MinValue
+                        };
+                        var uhiMinRes = await cosmosRepo.UpdateHIReport(uhiMinModel);
+                        var hiAfterMinResp = await hiContainer.ReadItemAsync<H_IReportTemplateDocument>(testHiIdStr, new PartitionKey((double)testPid));
+                        bool uhiMinOk = !uhiMinRes && hiBeforeMinResp.ETag == hiAfterMinResp.ETag;
+
                         // Seed OthersDescription non-null before update per T7, then update -> OthersDescription and CreatedDttm NULL
                         if (hiAfterInactive != null)
                         {
@@ -8773,15 +9044,16 @@ namespace DigitalCap.Server.DevTools
                         hiModel.UpdatedDttm = DateTime.UtcNow;
                         var uhiRes = await cosmosRepo.UpdateHIReport(hiModel);
                         var readHiBack = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, testHiIdStr, new PartitionKey((double)testPid));
-                        bool uhiOk = uhiRes && readHiBack != null
+                        bool uhiOk = uhiMinOk && uhiRes && readHiBack != null
                             && readHiBack.CompanyName == "UpdatedCompany"
                             && readHiBack.CreatedDttm == null
                             && readHiBack.OthersDescription == null;
 
-                        bool allHiOk = chiRes && chiReadBackOk && dupBlockedOk && inactiveBlockedOk && uhiOk;
-                        writeSteps.Add(new { step = "CreateAndUpdateHIReport.Trap2_19_20_T6_T7", passed = allHiOk, chiRes, chiReadBackOk, dupBlockedOk, inactiveBlockedOk, uhiOk });
+                        bool allHiOk = chiMinOk && chiRes && chiReadBackOk && dupBlockedOk && inactiveBlockedOk && uhiOk;
+                        writeSteps.Add(new { step = "CreateAndUpdateHIReport.Trap2_19_20_T6_T7_P6_P7", passed = allHiOk, chiMinOk, chiRes, chiReadBackOk, dupBlockedOk, inactiveBlockedOk, uhiOk });
 
-                        // 2.7 DeleteProjectTemplate(-999, -999) on ALL 9 containers + second template untouched (T5)
+                        // 2.7 DeleteProjectTemplate(-999, -997) on ALL 9 containers + second template untouched (T5, P8)
+                        int delTid = -997;
                         var dateSeedCreated = new DateTime(2026, 11, 1, 10, 0, 0, DateTimeKind.Utc);
                         var dateSeedUpdated = new DateTime(2026, 11, 2, 12, 0, 0, DateTimeKind.Utc);
 
@@ -8816,31 +9088,41 @@ namespace DigitalCap.Server.DevTools
                         await gicContainer.CreateItemAsync(gic998, new PartitionKey((double)testPid));
                         cleanupList.Add((gicContainer, gic998Id, new PartitionKey((double)testPid)));
 
-                        // Seed documents for template -999 for ALL 9 containers (T5: seed fresh PIC, PGM, PGCM for this test)
-                        var pic999Id = Guid.NewGuid().ToString().ToLowerInvariant();
-                        var pic999 = new ProjectImageCardsDocument { id = pic999Id, Id = -9991, ProjectId = testPid, TemplateId = testTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdateDttm = dateSeedUpdated };
-                        await picContainer.CreateItemAsync(pic999, new PartitionKey((double)testPid));
-                        cleanupList.Add((picContainer, pic999Id, new PartitionKey((double)testPid)));
+                        // Seed documents for template -997 for ALL 9 containers (ProjectId = -999, TemplateId = -997)
+                        var ptm997Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var ptm997 = new ProjectTemplateMappingDocument { id = ptm997Id, Id = ptm997Id, ProjectId = testPid, TemplateId = delTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await ptmContainer.CreateItemAsync(ptm997, new PartitionKey((double)testPid));
+                        cleanupList.Add((ptmContainer, ptm997Id, new PartitionKey((double)testPid)));
 
-                        var pgm999Id = Guid.NewGuid().ToString().ToLowerInvariant();
-                        var pgm999 = new ProjectGradingMappingDocument { id = pgm999Id, Id = -9992, ProjectId = testPid, TemplateId = testTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
-                        await pgmContainer.CreateItemAsync(pgm999, new PartitionKey((double)testPid));
-                        cleanupList.Add((pgmContainer, pgm999Id, new PartitionKey((double)testPid)));
+                        var pic997Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pic997 = new ProjectImageCardsDocument { id = pic997Id, Id = -9971, ProjectId = testPid, TemplateId = delTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdateDttm = dateSeedUpdated };
+                        await picContainer.CreateItemAsync(pic997, new PartitionKey((double)testPid));
+                        cleanupList.Add((picContainer, pic997Id, new PartitionKey((double)testPid)));
 
-                        var pgcm999Id = Guid.NewGuid().ToString().ToLowerInvariant();
-                        var pgcm999 = new ProjectGradingConditionMappingDocument { id = pgcm999Id, Id = -9998, ProjectId = testPid, TemplateId = testTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
-                        await pgcmContainer.CreateItemAsync(pgcm999, new PartitionKey((double)testPid));
-                        cleanupList.Add((pgcmContainer, pgcm999Id, new PartitionKey((double)testPid)));
+                        var pgm997Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pgm997 = new ProjectGradingMappingDocument { id = pgm997Id, Id = -9972, ProjectId = testPid, TemplateId = delTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await pgmContainer.CreateItemAsync(pgm997, new PartitionKey((double)testPid));
+                        cleanupList.Add((pgmContainer, pgm997Id, new PartitionKey((double)testPid)));
 
-                        var tic999Id = Guid.NewGuid().ToString().ToLowerInvariant();
-                        var tic999 = new TankImageCardDocument { id = tic999Id, Id = -9993, ProjectId = testPid, TemplateId = testTid, IsActive = true, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
-                        await ticContainer.CreateItemAsync(tic999, new PartitionKey((double)testPid));
-                        cleanupList.Add((ticContainer, tic999Id, new PartitionKey((double)testPid)));
+                        var pgcm997Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var pgcm997 = new ProjectGradingConditionMappingDocument { id = pgcm997Id, Id = -9978, ProjectId = testPid, TemplateId = delTid, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await pgcmContainer.CreateItemAsync(pgcm997, new PartitionKey((double)testPid));
+                        cleanupList.Add((pgcmContainer, pgcm997Id, new PartitionKey((double)testPid)));
 
-                        var gic999Id = Guid.NewGuid().ToString().ToLowerInvariant();
-                        var gic999 = new GenericImageCardDocument { id = gic999Id, Id = -9994, ProjectId = testPid, TemplateId = testTid, IsActive = true, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
-                        await gicContainer.CreateItemAsync(gic999, new PartitionKey((double)testPid));
-                        cleanupList.Add((gicContainer, gic999Id, new PartitionKey((double)testPid)));
+                        var tic997Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var tic997 = new TankImageCardDocument { id = tic997Id, Id = -9973, ProjectId = testPid, TemplateId = delTid, IsActive = true, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await ticContainer.CreateItemAsync(tic997, new PartitionKey((double)testPid));
+                        cleanupList.Add((ticContainer, tic997Id, new PartitionKey((double)testPid)));
+
+                        var gic997Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var gic997 = new GenericImageCardDocument { id = gic997Id, Id = -9974, ProjectId = testPid, TemplateId = delTid, IsActive = true, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await gicContainer.CreateItemAsync(gic997, new PartitionKey((double)testPid));
+                        cleanupList.Add((gicContainer, gic997Id, new PartitionKey((double)testPid)));
+
+                        var hi997Id = Guid.NewGuid().ToString().ToLowerInvariant();
+                        var hi997 = new H_IReportTemplateDocument { id = hi997Id, Id = hi997Id, ProjectId = testPid, IsActive = true, IsDeleted = false, CreatedDttm = dateSeedCreated, UpdatedDttm = dateSeedUpdated };
+                        await hiContainer.CreateItemAsync(hi997, new PartitionKey((double)testPid));
+                        cleanupList.Add((hiContainer, hi997Id, new PartitionKey((double)testPid)));
 
                         var hipgId = Guid.NewGuid().ToString().ToLowerInvariant();
                         var hipg = new HandIProjectGradingDocument { id = hipgId, Id = -9995, ProjectID = testPid, IsActive = true, IsDeleted = false, CreatedOn = dateSeedCreated, ModifiedOn = dateSeedUpdated };
@@ -8852,17 +9134,17 @@ namespace DigitalCap.Server.DevTools
                         await hipgcContainer.CreateItemAsync(hipgc, new PartitionKey((double)testPid));
                         cleanupList.Add((hipgcContainer, hipgcId, new PartitionKey((double)testPid)));
 
-                        // Call DeleteProjectTemplate(-999, -999)
-                        var dptRes = await cosmosRepo.DeleteProjectTemplate(testPid, testTid);
+                        // Call DeleteProjectTemplate(-999, -997)
+                        var dptRes = await cosmosRepo.DeleteProjectTemplate(testPid, delTid);
 
-                        // Read back ALL 9 containers for -999: verify soft-deleted / deactivated, and NO date column changed (T5)
-                        var rPtm = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, testPtmId, new PartitionKey((double)testPid));
-                        var rPic = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, pic999Id, new PartitionKey((double)testPid));
-                        var rPgm = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgm999Id, new PartitionKey((double)testPid));
-                        var rPgcm = await SafeReadAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, pgcm999Id, new PartitionKey((double)testPid));
-                        var rHi = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, testHiIdStr, new PartitionKey((double)testPid));
-                        var rTic = await SafeReadAsync<TankImageCardDocument>(ticContainer, tic999Id, new PartitionKey((double)testPid));
-                        var rGic = await SafeReadAsync<GenericImageCardDocument>(gicContainer, gic999Id, new PartitionKey((double)testPid));
+                        // Read back ALL 9 containers for -999/-997: verify soft-deleted / deactivated, and NO date column changed (T5, P8)
+                        var rPtm = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, ptm997Id, new PartitionKey((double)testPid));
+                        var rPic = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, pic997Id, new PartitionKey((double)testPid));
+                        var rPgm = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgm997Id, new PartitionKey((double)testPid));
+                        var rPgcm = await SafeReadAsync<ProjectGradingConditionMappingDocument>(pgcmContainer, pgcm997Id, new PartitionKey((double)testPid));
+                        var rHi = await SafeReadAsync<H_IReportTemplateDocument>(hiContainer, hi997Id, new PartitionKey((double)testPid));
+                        var rTic = await SafeReadAsync<TankImageCardDocument>(ticContainer, tic997Id, new PartitionKey((double)testPid));
+                        var rGic = await SafeReadAsync<GenericImageCardDocument>(gicContainer, gic997Id, new PartitionKey((double)testPid));
                         var rHipg = await SafeReadAsync<HandIProjectGradingDocument>(hipgContainer, hipgId, new PartitionKey((double)testPid));
                         var rHipgc = await SafeReadAsync<HandIProjectGradingConditionsDocument>(hipgcContainer, hipgcId, new PartitionKey((double)testPid));
 
@@ -8876,15 +9158,17 @@ namespace DigitalCap.Server.DevTools
                             && rHipg?.IsActive == false && rHipg?.IsDeleted == true
                             && rHipgc?.IsActive == false && rHipgc?.IsDeleted == true;
 
-                        bool datesUnchanged999 = rPic?.CreatedDttm == dateSeedCreated && rPic?.UpdateDttm == dateSeedUpdated
+                        bool datesUnchanged999 = rPtm?.CreatedDttm == dateSeedCreated && rPtm?.UpdatedDttm == dateSeedUpdated
+                            && rPic?.CreatedDttm == dateSeedCreated && rPic?.UpdateDttm == dateSeedUpdated
                             && rPgm?.CreatedDttm == dateSeedCreated && rPgm?.UpdatedDttm == dateSeedUpdated
                             && rPgcm?.CreatedDttm == dateSeedCreated && rPgcm?.UpdatedDttm == dateSeedUpdated
+                            && rHi?.CreatedDttm == dateSeedCreated && rHi?.UpdatedDttm == dateSeedUpdated
                             && rTic?.CreatedDttm == dateSeedCreated && rTic?.UpdatedDttm == dateSeedUpdated
                             && rGic?.CreatedDttm == dateSeedCreated && rGic?.UpdatedDttm == dateSeedUpdated
                             && rHipg?.CreatedOn == dateSeedCreated && rHipg?.ModifiedOn == dateSeedUpdated
                             && rHipgc?.CreatedOn == dateSeedCreated && rHipgc?.ModifiedOn == dateSeedUpdated;
 
-                        // Second template -998 untouched across all 6 containers (T5)
+                        // Second template -998 untouched across all 6 containers (T5, P8 dates check)
                         var rPtm998 = await SafeReadAsync<ProjectTemplateMappingDocument>(ptmContainer, ptm998Id, new PartitionKey((double)testPid));
                         var rPic998 = await SafeReadAsync<ProjectImageCardsDocument>(picContainer, pic998Id, new PartitionKey((double)testPid));
                         var rPgm998 = await SafeReadAsync<ProjectGradingMappingDocument>(pgmContainer, pgm998Id, new PartitionKey((double)testPid));
@@ -8899,8 +9183,15 @@ namespace DigitalCap.Server.DevTools
                             && rTic998?.IsActive == true
                             && rGic998?.IsActive == true && rGic998?.IsDeleted == false;
 
-                        bool dptOk = dptRes && flagged999 && datesUnchanged999 && untouched998;
-                        writeSteps.Add(new { step = "DeleteProjectTemplate.All9Containers.Trap18_T5", passed = dptOk, dptRes, flagged999, datesUnchanged999, untouched998 });
+                        bool datesUnchanged998 = rPtm998?.CreatedDttm == dateSeedCreated && rPtm998?.UpdatedDttm == dateSeedUpdated
+                            && rPic998?.CreatedDttm == dateSeedCreated && rPic998?.UpdateDttm == dateSeedUpdated
+                            && rPgm998?.CreatedDttm == dateSeedCreated && rPgm998?.UpdatedDttm == dateSeedUpdated
+                            && rPgcm998?.CreatedDttm == dateSeedCreated && rPgcm998?.UpdatedDttm == dateSeedUpdated
+                            && rTic998?.CreatedDttm == dateSeedCreated && rTic998?.UpdatedDttm == dateSeedUpdated
+                            && rGic998?.CreatedDttm == dateSeedCreated && rGic998?.UpdatedDttm == dateSeedUpdated;
+
+                        bool dptOk = dptRes && flagged999 && datesUnchanged999 && untouched998 && datesUnchanged998;
+                        writeSteps.Add(new { step = "DeleteProjectTemplate.All9Containers.Trap18_T5_P8", passed = dptOk, dptRes, flagged999, datesUnchanged999, untouched998, datesUnchanged998 });
 
                         // 2.8 AddEditImageNew (Trap 14)
                         int testImgId = -99901;
@@ -9003,6 +9294,7 @@ namespace DigitalCap.Server.DevTools
 
                         bool delBuOk = delBuRes == -1 && checkBu == null;
                         writeSteps.Add(new { step = "DeleteBulkUploadImage.Trap13", passed = delBuOk, delBuRes, checkBuNull = (checkBu == null) });
+                        } // end else (preCheckPassed)
                     }
                     catch (Exception ex)
                     {
