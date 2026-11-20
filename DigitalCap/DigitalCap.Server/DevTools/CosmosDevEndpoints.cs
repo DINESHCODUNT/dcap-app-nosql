@@ -9790,7 +9790,6 @@ namespace DigitalCap.Server.DevTools
 
                     var sqlCertsCount = await sqlCapRepo.GetCertsCountAsync();
                     var cosCertsCount = await cosmosCapRepo.GetCertsCountAsync();
-                    methodPositiveRows["Cap.GetCertsCountAsync"] = sqlCertsCount?.Count ?? 0;
                     checks.Add(ParityCompare.Single("C2.Cap.GetCertsCountAsync", sqlCertsCount, cosCertsCount,
                         ("Count", x => x.Count)));
                 }
@@ -9947,12 +9946,17 @@ namespace DigitalCap.Server.DevTools
                     var cosPnM = await cosmosProjectRepo.GetProjectName(-99999);
                     var cosImoM = await cosmosProjectRepo.GetIMONumberByProjectId(-99999);
                     var cosVtM = await cosmosProjectRepo.GetProjectVesselType(-99999);
+                    var sqlPnM = await sqlProjectRepo.GetProjectName(-99999);
+                    var sqlImoM = await sqlProjectRepo.GetIMONumberByProjectId(-99999);
+                    var sqlVtM = await sqlProjectRepo.GetProjectVesselType(-99999);
 
-                    bool eqLookups = string.Equals(sqlPn, cosPn, StringComparison.OrdinalIgnoreCase)
-                        && string.Equals(sqlImo, cosImo, StringComparison.OrdinalIgnoreCase)
-                        && string.Equals(sqlVt, cosVt, StringComparison.OrdinalIgnoreCase)
-                        && cosPnM == null && cosImoM == null && cosVtM == null;
-                    methodPositiveRows["Project.Lookups"] = eqLookups ? 1 : 0;
+                    bool eqLookups = string.Equals(sqlPn, cosPn, StringComparison.Ordinal)
+                        && string.Equals(sqlImo, cosImo, StringComparison.Ordinal)
+                        && string.Equals(sqlVt, cosVt, StringComparison.Ordinal)
+                        && string.Equals(sqlPnM, cosPnM, StringComparison.Ordinal)
+                        && string.Equals(sqlImoM, cosImoM, StringComparison.Ordinal)
+                        && string.Equals(sqlVtM, cosVtM, StringComparison.Ordinal);
+                    methodPositiveRows["Project.Lookups"] = sqlPn != null ? 1 : 0;
                     checks.Add(new { check = $"P8.Project.LookupsAndMissing({realProject.Id})", equal = eqLookups, cosPnM, cosImoM, cosVtM });
                     if (!eqLookups) allPassed = false;
 
@@ -10357,18 +10361,18 @@ namespace DigitalCap.Server.DevTools
                 try
                 {
                     // Empty-before check across all 12 write containers (T-6)
-                    var preCp = await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9991'");
+                    var preCp = await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id IN ('ffffffff-ffff-ffff-ffff-ffffffff9991', 'ffffffff-ffff-ffff-ffff-ffffffff9999')");
                     var preUser = await SafeQueryAsync<object>(userContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9992'");
                     var preRolePerm = await SafeQueryAsync<object>(rolePermContainer, "SELECT * FROM c WHERE c.RoleId = 'ffffffff-ffff-ffff-ffff-ffffffff9997' OR c.PermissionId = 'ffffffff-ffff-ffff-ffff-ffffffff9996' OR c.Id = 'ffffffff-ffff-ffff-ffff-ffffffff9998'");
-                    var preComment = await SafeQueryAsync<object>(commentsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
-                    var preFile = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
-                    var preProj = await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
+                    var preComment = await SafeQueryAsync<object>(commentsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888) OR c.id = '-99888'");
+                    var preFile = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888)");
+                    var preProj = await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998', '-99888')");
                     var preTank = await SafeQueryAsync<object>(tankContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
-                    var preVessel = await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
+                    var preVessel = await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998', '-99888')");
                     var preCert = await SafeQueryAsync<object>(certsContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
                     var preAct = await SafeQueryAsync<object>(actContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888)");
                     var prePts = await SafeQueryAsync<object>(ptsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
-                    var preRsd = await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
+                    var preRsd = await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998', '-997', '-99888')");
 
                     bool preCheckPassed = preCp.Count == 0 && preUser.Count == 0 && preRolePerm.Count == 0 && preComment.Count == 0
                         && preFile.Count == 0 && preProj.Count == 0 && preTank.Count == 0 && preVessel.Count == 0
@@ -10625,7 +10629,7 @@ namespace DigitalCap.Server.DevTools
                         {
                             await cosmosCommentRepo.UpdateCommentAsync(-99888, -99888, null, "new text", "admin");
                         }
-                        catch
+                        catch (Exception)
                         {
                             b8UpdThrown = true;
                         }
@@ -10704,6 +10708,7 @@ namespace DigitalCap.Server.DevTools
                             ProjectStatus = 1,
                             ProjectPriority = 1,
                             CapRegion = "Americas",
+                            IMO = 0,
                             IsDeleted = false
                         };
                         await projectContainer.CreateItemAsync(projDoc, new PartitionKey("-999"));
@@ -10757,6 +10762,7 @@ namespace DigitalCap.Server.DevTools
                             UpdateDttm = new DateTime(1700, 1, 1)
                         };
                         bool createBadTankRes = await cosmosTankRepo.CreateTank(badTank);
+                        cleanupList.Add((tankContainer, badTank.Id.ToString(), new PartitionKey(-999.0)));
                         var readBadTank = await SafeReadAsync<VesselTankMappingDocument>(tankContainer, badTank.Id.ToString(), new PartitionKey(-999.0));
                         bool t4BadOk = !createBadTankRes && readBadTank == null;
 
@@ -10869,12 +10875,12 @@ namespace DigitalCap.Server.DevTools
                         bool v13Ok = readRsd != null && readRsd.specialHullNo == null;
 
                         // V14: UpdateSurveyAudit date < 1753 swallowed without error, nothing written
-                        var preV14Count = (await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
+                        var preV14Count = (await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id = '-997'", new PartitionKey("-997"))).Count;
                         bool v14Res = await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus
                         {
                             ClassSurveyDate = new DateTime(1700, 1, 1)
-                        }, -998);
-                        var postV14Count = (await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
+                        }, -997);
+                        var postV14Count = (await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id = '-997'", new PartitionKey("-997"))).Count;
                         bool v14Ok = v14Res && preV14Count == postV14Count && postV14Count == 0;
 
                         bool certSurveyOk = v12Ok && v13Ok && v14Ok;
@@ -10925,7 +10931,7 @@ namespace DigitalCap.Server.DevTools
                         await tankContainer.CreateItemAsync(e1TankDoc, new PartitionKey(-999.0));
                         cleanupList.Add((tankContainer, e1TankGuid.ToString(), new PartitionKey(-999.0)));
 
-                        await cosmosExportRepo.UpdateTankSectionRequiredInReportAsync(true, e1TankGuid, 0, "admin");
+                        await cosmosExportRepo.UpdateTankSectionRequiredInReportAsync(true, e1TankGuid, -999, "admin");
                         var readE1Tank = await SafeReadAsync<VesselTankMappingDocument>(tankContainer, e1TankGuid.ToString(), new PartitionKey(-999.0));
                         bool e1Ok = readE1Tank != null && readE1Tank.RequiredInReport == true;
                         writeSteps.Add(new { step = "E1.Export.UpdateTankRequiredInReport.Imo0MatchesSpaces", passed = e1Ok });
