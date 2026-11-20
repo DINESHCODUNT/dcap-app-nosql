@@ -278,7 +278,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                             var response = await feed.ReadNextAsync();
                             foreach (var doc in response)
                             {
-                                if (string.Equals(doc.VesselType?.TrimEnd(), vesselTypeStr.TrimEnd(), StringComparison.OrdinalIgnoreCase) &&
+                                if (doc.VesselType != null && string.Equals(doc.VesselType.TrimEnd(' '), vesselTypeStr.TrimEnd(' '), StringComparison.OrdinalIgnoreCase) &&
                                     doc.TankTypeId.HasValue && allowedTankTypeIds.Contains(doc.TankTypeId.Value))
                                 {
                                     // INNER JOIN TankType: drop if not found
@@ -655,8 +655,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     {
                         if (doc.ImoNumber != null)
                         {
-                            // Compare int.Parse(ImoNumber.Trim()), throw if non-numeric
-                            int docImo = int.Parse(doc.ImoNumber.Trim());
+                            // SQL converts ''/spaces to 0; non-numeric still throws
+                            var trimmedImo = doc.ImoNumber.Trim(' ');
+                            int docImo = trimmedImo.Length == 0 ? 0 : int.Parse(trimmedImo);
                             if (docImo == imo.Value)
                             {
                                 doc.RequiredInReport = requiredInReport;

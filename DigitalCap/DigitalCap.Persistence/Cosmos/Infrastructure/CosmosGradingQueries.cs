@@ -57,7 +57,7 @@ namespace DigitalCap.Persistence.Cosmos.Infrastructure
                 }
                 // Join EVERY VesselType row with that name
                 var matchingVtIds = vtList
-                    .Where(v => string.Equals(v.VesselType?.TrimEnd(), vesselType.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                    .Where(v => v.VesselType != null && string.Equals(v.VesselType.TrimEnd(' '), vesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                     .Select(v => v.Id)
                     .ToHashSet();
 
@@ -169,7 +169,7 @@ namespace DigitalCap.Persistence.Cosmos.Infrastructure
                         {
                             if (vesselType != null)
                             {
-                                if (string.Equals(doc.VesselType?.TrimEnd(), vesselType.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                                if (doc.VesselType != null && string.Equals(doc.VesselType.TrimEnd(' '), vesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                                 {
                                     distinctTankTypeIds.Add(doc.TankTypeId.Value);
                                 }

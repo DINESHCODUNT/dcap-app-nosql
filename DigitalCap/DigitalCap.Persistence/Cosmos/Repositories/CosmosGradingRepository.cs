@@ -160,7 +160,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     foreach (var doc in response)
                     {
-                        if (vesselType != null && string.Equals(doc.VesselType?.TrimEnd(), vesselType.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                        if (vesselType != null && doc.VesselType != null && string.Equals(doc.VesselType.TrimEnd(' '), vesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                         {
                             templateRows.Add(doc);
                         }
@@ -307,7 +307,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             foreach (var g in gradingList)
             {
                 // inner join vesselType v_type on grading.VesselType = v_type.VesselType
-                var matchingVt = vtList.Where(vt => string.Equals(g.VesselType?.TrimEnd(), vt.VesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+                var matchingVt = vtList.Where(vt => g.VesselType != null && vt.VesselType != null && string.Equals(g.VesselType.TrimEnd(' '), vt.VesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
                 foreach (var vt in matchingVt)
                 {
                     // inner join Config.VesselTypeSectionGradingMapping VSG on grading.GradingGroupId = VSG.CategoryId
@@ -394,7 +394,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             foreach (var g in vgmList)
             {
                 // inner join vesselType v_type on grading.VesselType = v_type.VesselType
-                var matchingVt = vtList.Where(vt => string.Equals(g.VesselType?.TrimEnd(), vt.VesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+                var matchingVt = vtList.Where(vt => g.VesselType != null && vt.VesselType != null && string.Equals(g.VesselType.TrimEnd(' '), vt.VesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
                 foreach (var vt in matchingVt)
                 {
                     // inner join Config.VesselTypeTankGradingMapping VSG on grading.GradingGroupId = VSG.CategoryId and grading.TankTypeId = VSG.TankTypeId

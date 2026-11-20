@@ -33,7 +33,7 @@ namespace DigitalCap.Persistence.Cosmos.Documents
         public string? HullNum { get; set; }
 
         [JsonProperty("IMONum")]
-        public int? IMONum { get; set; }
+        public string? IMONum { get; set; }
 
         [JsonProperty("Length")]
         public double? Length { get; set; }

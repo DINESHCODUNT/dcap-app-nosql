@@ -423,8 +423,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             }
 
             var container = ContainerFactory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
-            var q = new QueryDefinition("SELECT * FROM c WHERE c.ImoNumber = @imo AND (NOT IS_DEFINED(c.VesselType) OR IS_NULL(c.VesselType)) AND c.IsDeleted = false")
-                .WithParameter("@imo", imonumber);
+            var imoTrim = imonumber.TrimEnd(' ');
+            var q = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.ImoNumber), @imo, true) AND (NOT IS_DEFINED(c.VesselType) OR IS_NULL(c.VesselType)) AND c.IsDeleted = false")
+                .WithParameter("@imo", imoTrim);
 
             var list = new List<VesselTank>();
             using (var feed = container.GetItemQueryIterator<VesselTankMappingDocument>(q))
@@ -434,7 +435,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     foreach (var doc in response)
                     {
-                        if (doc.ProjectId.HasValue && projIds.Contains(doc.ProjectId.Value))
+                        if (doc.ImoNumber != null && string.Equals(doc.ImoNumber.TrimEnd(' '), imoTrim, StringComparison.OrdinalIgnoreCase) &&
+                            doc.ProjectId.HasValue && projIds.Contains(doc.ProjectId.Value))
                         {
                             list.Add(MapToVesselTank(doc));
                         }
@@ -496,7 +498,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     }
                 }
 
-                var matchingVt = vtList.Where(v => string.Equals(v.VesselType?.TrimEnd(), vesseltype.TrimEnd(), StringComparison.OrdinalIgnoreCase)).ToList();
+                var matchingVt = vtList.Where(v => v.VesselType != null && string.Equals(v.VesselType.TrimEnd(' '), vesseltype.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)).ToList();
                 if (matchingVt.Count > 1)
                 {
                     throw new InvalidOperationException("Subquery returned more than 1 value. This is not permitted when the subquery follows =, !=, <, <= , >, >= or when the subquery is used as an expression.");
@@ -528,8 +530,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             if (allowedTankTypeIds.Count > 0)
             {
                 var container = ContainerFactory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
-                var q = new QueryDefinition("SELECT * FROM c WHERE c.ImoNumber = @imo AND (NOT IS_DEFINED(c.VesselType) OR IS_NULL(c.VesselType)) AND c.IsDeleted = false AND c.ProjectId = @pid")
-                    .WithParameter("@imo", imonumber)
+                var imoTrim = imonumber.TrimEnd(' ');
+                var q = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.ImoNumber), @imo, true) AND (NOT IS_DEFINED(c.VesselType) OR IS_NULL(c.VesselType)) AND c.IsDeleted = false AND c.ProjectId = @pid")
+                    .WithParameter("@imo", imoTrim)
                     .WithParameter("@pid", projectId);
 
                 var sourceTanks = new List<VesselTankMappingDocument>();
@@ -540,7 +543,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                         var response = await feed.ReadNextAsync();
                         foreach (var doc in response)
                         {
-                            if (doc.TankTypeId.HasValue && allowedTankTypeIds.Contains(doc.TankTypeId.Value))
+                            if (doc.ImoNumber != null && string.Equals(doc.ImoNumber.TrimEnd(' '), imoTrim, StringComparison.OrdinalIgnoreCase) &&
+                                doc.TankTypeId.HasValue && allowedTankTypeIds.Contains(doc.TankTypeId.Value))
                             {
                                 sourceTanks.Add(doc);
                             }
@@ -552,7 +556,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var sortedSource = sourceTanks
                     .OrderBy(t => t.TankTypeId.HasValue)
                     .ThenBy(t => t.TankTypeId)
-                    .ThenBy(t => t.TankName == null)
+                    .ThenBy(t => t.TankName != null)
                     .ThenBy(t => t.TankName)
                     .ThenBy(t => t.CreatedDttm.HasValue)
                     .ThenBy(t => t.CreatedDttm)
@@ -658,7 +662,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     foreach (var doc in response)
                     {
-                        if (string.Equals(doc.VesselType?.TrimEnd(), vesseltype.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(doc.VesselType?.TrimEnd(' '), vesseltype.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                         {
                             tankList.Add(doc);
                         }
@@ -670,7 +674,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             foreach (var tank in tankList)
             {
                 // Join VTM on VTM.VesselType = tank.VesselType and VTM.TankTypeId = tank.TankTypeId
-                var matchingVtm = distinctVtm.Where(v => string.Equals(v.VesselType?.TrimEnd(), tank.VesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase) && v.TankTypeId == tank.TankTypeId);
+                var matchingVtm = distinctVtm.Where(v => string.Equals(v.VesselType?.TrimEnd(' '), tank.VesselType?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase) && v.TankTypeId == tank.TankTypeId);
                 foreach (var match in matchingVtm)
                 {
                     var vt = MapToVesselTank(tank);
@@ -685,21 +689,28 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         private async Task<bool> Sp_Create_Vessel_TankMapping(VesselTank vesselTank)
         {
+            if (vesselTank.CreatedDttm < new DateTime(1753, 1, 1) || vesselTank.UpdateDttm < new DateTime(1753, 1, 1))
+            {
+                throw new ArgumentOutOfRangeException("SqlDateTime overflow: must be between 1/1/1753 12:00:00 AM and 12/31/9999 11:59:59 PM.");
+            }
+
             var container = ContainerFactory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
             string idStr = vesselTank.Id.ToString();
 
             // Check Id does not exist in ANY partition first
             var checkQ = new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.Id = @id").WithParameter("@id", idStr);
+            int totalCount = 0;
             using (var feed = container.GetItemQueryIterator<int>(checkQ))
             {
-                if (feed.HasMoreResults)
+                while (feed.HasMoreResults)
                 {
-                    var count = (await feed.ReadNextAsync()).FirstOrDefault();
-                    if (count > 0)
-                    {
-                        throw new InvalidOperationException($"Violation of PRIMARY KEY constraint. Cannot insert duplicate key in object 'dbo.Vessel_TankMapping'. The duplicate key value is ({idStr}).");
-                    }
+                    var response = await feed.ReadNextAsync();
+                    totalCount += response.Sum();
                 }
+            }
+            if (totalCount > 0)
+            {
+                throw new InvalidOperationException($"Violation of PRIMARY KEY constraint. Cannot insert duplicate key in object 'dbo.Vessel_TankMapping'. The duplicate key value is ({idStr}).");
             }
 
             string? subheader = vesselTank.Subheader?.Length > 100 ? vesselTank.Subheader.Substring(0, 100) : vesselTank.Subheader;
@@ -757,8 +768,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 return new List<VesselTank>();
             }
             var container = ContainerFactory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
-            var q = new QueryDefinition("SELECT * FROM c WHERE c.ImoNumber = @imo AND (NOT IS_DEFINED(c.VesselType) OR IS_NULL(c.VesselType)) AND c.IsDeleted = false AND c.ProjectId = @pid")
-                .WithParameter("@imo", imonumber)
+            var imoTrim = imonumber.TrimEnd(' ');
+            var q = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.ImoNumber), @imo, true) AND (NOT IS_DEFINED(c.VesselType) OR IS_NULL(c.VesselType)) AND c.IsDeleted = false AND c.ProjectId = @pid")
+                .WithParameter("@imo", imoTrim)
                 .WithParameter("@pid", projectId);
 
             var list = new List<VesselTankMappingDocument>();
@@ -767,7 +779,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 while (feed.HasMoreResults)
                 {
                     var response = await feed.ReadNextAsync();
-                    list.AddRange(response);
+                    foreach (var doc in response)
+                    {
+                        if (doc.ImoNumber != null && string.Equals(doc.ImoNumber.TrimEnd(' '), imoTrim, StringComparison.OrdinalIgnoreCase))
+                        {
+                            list.Add(doc);
+                        }
+                    }
                 }
             }
 
@@ -775,7 +793,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             return list
                 .OrderBy(t => t.TankTypeId.HasValue)
                 .ThenBy(t => t.TankTypeId)
-                .ThenBy(t => t.TankName == null)
+                .ThenBy(t => t.TankName != null)
                 .ThenBy(t => t.TankName)
                 .ThenBy(t => t.CreatedDttm.HasValue)
                 .ThenBy(t => t.CreatedDttm)
@@ -800,7 +818,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     foreach (var doc in response)
                     {
-                        if (string.Equals(doc.VesselType?.TrimEnd(), vesseltype.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(doc.VesselType?.TrimEnd(' '), vesseltype.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                         {
                             list.Add(new VesselTankGrading
                             {
@@ -887,7 +905,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                         var response = await feed.ReadNextAsync();
                         foreach (var doc in response)
                         {
-                            if (string.Equals(doc.VesselType?.TrimEnd(), vesseltype.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                            if (string.Equals(doc.VesselType?.TrimEnd(' '), vesseltype.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                             {
                                 vtmDocs.Add(doc);
                             }
@@ -929,7 +947,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                     return list
                         .OrderBy(t => t.TankTypeId)
-                        .ThenBy(t => t.TankName == null)
+                        .ThenBy(t => t.TankName != null)
                         .ThenBy(t => t.TankName)
                         .ToList();
                 }
@@ -937,8 +955,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             if (imonumber != null && vesselmatchcount == 0)
             {
-                var q = new QueryDefinition("SELECT * FROM c WHERE c.ImoNumber = @imo AND c.IsActive = true AND c.ProjectId = @pid")
-                    .WithParameter("@imo", imonumber)
+                var imoTrim = imonumber.TrimEnd(' ');
+                var q = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.ImoNumber), @imo, true) AND c.IsActive = true AND c.ProjectId = @pid")
+                    .WithParameter("@imo", imoTrim)
                     .WithParameter("@pid", projectId);
 
                 var imoDocs = new List<VesselTankMappingDocument>();
@@ -947,7 +966,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     while (feed.HasMoreResults)
                     {
                         var response = await feed.ReadNextAsync();
-                        imoDocs.AddRange(response);
+                        foreach (var doc in response)
+                        {
+                            if (doc.ImoNumber != null && string.Equals(doc.ImoNumber.TrimEnd(' '), imoTrim, StringComparison.OrdinalIgnoreCase))
+                            {
+                                imoDocs.Add(doc);
+                            }
+                        }
                     }
                 }
 
@@ -984,7 +1009,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                     return list
                         .OrderBy(t => t.TankTypeId)
-                        .ThenBy(t => t.TankName == null)
+                        .ThenBy(t => t.TankName != null)
                         .ThenBy(t => t.TankName)
                         .ToList();
                 }
@@ -1068,7 +1093,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     foreach (var doc in response)
                     {
-                        if (vesselType != null && string.Equals(doc.VesselType?.TrimEnd(), vesselType.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                        if (vesselType != null && string.Equals(doc.VesselType?.TrimEnd(' '), vesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                         {
                             if (tankTypeId == 0)
                             {
@@ -1088,7 +1113,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             return docs
                 .OrderBy(d => d.TankTypeId.HasValue)
                 .ThenBy(d => d.TankTypeId)
-                .ThenBy(d => d.GradingName == null)
+                .ThenBy(d => d.GradingName != null)
                 .ThenBy(d => d.GradingName)
                 .Select(d => new TankGradingUI
                 {
@@ -1511,7 +1536,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var distinctMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var vt in list)
             {
-                var trimmed = vt.TrimEnd();
+                var trimmed = vt.TrimEnd(' ');
                 if (!distinctMap.ContainsKey(trimmed))
                 {
                     distinctMap[trimmed] = vt;
@@ -1652,7 +1677,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     {
                         if (vt.TankTypeId.HasValue && ttMap.TryGetValue(vt.TankTypeId.Value, out var tankTypeName))
                         {
-                            var matchingC = distinctDataC.Where(c => string.Equals(c.VesselType?.TrimEnd(), vt.VesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase) && c.TankTypeId == vt.TankTypeId.Value);
+                            var matchingC = distinctDataC.Where(c => string.Equals(c.VesselType?.TrimEnd(' '), vt.VesselType?.TrimEnd(' '), StringComparison.OrdinalIgnoreCase) && c.TankTypeId == vt.TankTypeId.Value);
                             foreach (var c in matchingC)
                             {
                                 results.Add(new Core.Models.View.Admin.Tank
@@ -1731,7 +1756,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 }
 
                 var matchingImos = projList
-                    .Where(p => (p.LeadSurveyor != null && string.Equals(p.LeadSurveyor.TrimEnd(), username.TrimEnd(), StringComparison.OrdinalIgnoreCase)) ||
+                    .Where(p => (p.LeadSurveyor != null && string.Equals(p.LeadSurveyor.TrimEnd(' '), username.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)) ||
                                 (p.SecondSurveyor != null && MatchesLike(p.SecondSurveyor, username)))
                     .Where(p => p.IMO.HasValue)
                     .Select(p => p.IMO!.Value)
@@ -1785,9 +1810,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 // Order by result.VesselType, result.TankType (NULL first)
                 return results
-                    .OrderBy(r => r.VesselType == null)
+                    .OrderBy(r => r.VesselType != null)
                     .ThenBy(r => r.VesselType)
-                    .ThenBy(r => r.TankType == null)
+                    .ThenBy(r => r.TankType != null)
                     .ThenBy(r => r.TankType)
                     .ToList();
             }

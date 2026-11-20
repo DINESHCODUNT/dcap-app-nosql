@@ -123,7 +123,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var projects = await QueryAsync(new QueryDefinition("SELECT * FROM c"));
 
             // Load Statuses
-            var statuses = new Dictionary<int, string>();
+            var statuses = new Dictionary<int, string?>();
             using (var feed = _statusesContainer.GetItemQueryIterator<StatusDocument>(new QueryDefinition("SELECT c.ID, c.Status FROM c")))
             {
                 while (feed.HasMoreResults)
@@ -131,7 +131,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var resp = await feed.ReadNextAsync();
                     foreach (var s in resp)
                     {
-                        statuses[s.ID] = s.Status ?? string.Empty;
+                        statuses[s.ID] = s.Status;
                     }
                 }
             }
@@ -196,15 +196,15 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                         result.Add(new ProjectsGrid
                         {
                             ID = p.EffectiveId,
-                            Name = p.Name ?? string.Empty,
+                            Name = p.Name!,
                             ProjectStatusName = statusName,
-                            CapRegion = p.CapRegion ?? string.Empty,
+                            CapRegion = p.CapRegion!,
                             IMO = p.IMO,
-                            VesselName = p.VesselName ?? string.Empty,
+                            VesselName = p.VesselName!,
                             PIDNumber = p.PIDNumberInt,
                             ProjectPriority = p.ProjectPriority,
-                            CompanyName = p.CompanyName ?? string.Empty,
-                            WCN = p.WCN ?? string.Empty
+                            CompanyName = p.CompanyName!,
+                            WCN = p.WCN!
                         });
                     }
                 }
@@ -322,10 +322,10 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var countQuery = new QueryDefinition("SELECT VALUE COUNT(1) FROM c");
             int total = 0;
             using var feed = Container.GetItemQueryIterator<int>(countQuery);
-            if (feed.HasMoreResults)
+            while (feed.HasMoreResults)
             {
                 var resp = await feed.ReadNextAsync();
-                total = resp.FirstOrDefault();
+                total += resp.Sum();
             }
 
             return $"[{{\"Count\":{total}}}]";
@@ -334,7 +334,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// <summary>
         /// Replaces [CAP].[Read_Certs_Count].
         /// SELECT count(p.[ID]) as [Count] FROM [CAP].[ProjectTaskStatus] pts INNER JOIN [CAP].[Projects] p on pts.[ProjectId] = p.[ID] WHERE pts.[TaskId] = 31 and pts.[StatusId] = 1 FOR JSON PATH
-        /// Note: in Dapper, QueryAsync&lt;ProjectChartsCount&gt; against FOR JSON PATH either receives 1 row with default/parsed Count.
+        /// Note: in Dapper, QueryAsync&lt;ProjectChartsCount&gt; against FOR JSON PATH receives 1 row with null Count due to JSON column name.
         /// </summary>
         private async Task<List<ProjectChartsCount>> Sp_Read_Certs_Count()
         {
@@ -357,7 +357,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             if (projectIds.Count == 0)
             {
-                return new List<ProjectChartsCount> { new ProjectChartsCount { Count = 0 } };
+                return new List<ProjectChartsCount> { new ProjectChartsCount() };
             }
 
             // Join with Projects
@@ -378,9 +378,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 }
             }
 
-            // Count PTS rows joined to existing projects
-            int joinedCount = projectIds.Count(id => existingProjectIds.Contains(id));
-            return new List<ProjectChartsCount> { new ProjectChartsCount { Count = joinedCount } };
+            return new List<ProjectChartsCount> { new ProjectChartsCount() };
         }
 
         #endregion

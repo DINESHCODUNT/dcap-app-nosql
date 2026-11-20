@@ -125,13 +125,16 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         private async Task Sp_CreateProjectSectionImageDescriptions(int projectId, string vesselType)
         {
             var cutVesselType = vesselType?.Length > 50 ? vesselType.Substring(0, 50) : vesselType;
+            if (cutVesselType == null)
+                return;
+
             // WHERE VesselType=@VesselType and IsActive=1 and IsDeleted=0 and (ProjectId is null or ProjectId=0)
             var q = new QueryDefinition(
                 "SELECT * FROM c WHERE c.IsActive = true AND c.IsDeleted = false AND (IS_NULL(c.ProjectId) OR c.ProjectId = 0 OR NOT IS_DEFINED(c.ProjectId))");
 
             var templates = await QueryAsync(q);
             var matchedTemplates = templates
-                .Where(t => string.Equals(t.VesselType?.TrimEnd(), cutVesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                .Where(t => t.VesselType != null && string.Equals(t.VesselType.TrimEnd(' '), cutVesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                 .OrderBy(t => t.Id)
                 .ToList();
 
@@ -180,7 +183,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             var rtsContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_ReportTemplateSection);
             var rtsQ = new QueryDefinition("SELECT * FROM c");
-            var rtsMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var rtsMap = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             using (var feed = rtsContainer.GetItemQueryIterator<ReportTemplateSectionDocument>(rtsQ))
             {
                 while (feed.HasMoreResults)
@@ -188,7 +191,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     foreach (var doc in response)
                     {
-                        if (!string.IsNullOrEmpty(doc.Id) && doc.SectionName != null)
+                        if (!string.IsNullOrEmpty(doc.Id))
                         {
                             rtsMap[doc.Id] = doc.SectionName;
                         }
@@ -211,7 +214,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             var ttContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_TankType);
             var ttQ = new QueryDefinition("SELECT * FROM c");
-            var tankTypeMap = new Dictionary<int, string>();
+            var tankTypeMap = new Dictionary<int, string?>();
             using (var feed = ttContainer.GetItemQueryIterator<TankTypeDocument>(ttQ))
             {
                 while (feed.HasMoreResults)
@@ -219,10 +222,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     foreach (var doc in response)
                     {
-                        if (doc.TankType != null)
-                        {
-                            tankTypeMap[doc.Id] = doc.TankType;
-                        }
+                        tankTypeMap[doc.Id] = doc.TankType;
                     }
                 }
             }
@@ -232,7 +232,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             // SectionGrading branch
             foreach (var descr in descriptions)
             {
-                var matchingSecMaps = secMappings.Where(sm => sm.CategoryId == descr.CategoryId).ToList();
+                var matchingSecMaps = descr.CategoryId != null
+                    ? secMappings.Where(sm => sm.CategoryId == descr.CategoryId).ToList()
+                    : new List<SectionImageDescriptionMappingDocument>();
                 foreach (var secimg in matchingSecMaps)
                 {
                     if (!string.IsNullOrEmpty(secimg.SectionId) && rtsMap.TryGetValue(secimg.SectionId, out var sectionName))
@@ -259,7 +261,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             // TankGrading branch
             foreach (var descr in descriptions)
             {
-                var matchingTankMaps = tankMappings.Where(tm => tm.CategoryId == descr.CategoryId).ToList();
+                var matchingTankMaps = descr.CategoryId != null
+                    ? tankMappings.Where(tm => tm.CategoryId == descr.CategoryId).ToList()
+                    : new List<TankImageDescriptionMappingDocument>();
                 foreach (var tank in matchingTankMaps)
                 {
                     if (tank.TankTypeId.HasValue && tankTypeMap.TryGetValue(tank.TankTypeId.Value, out var tankTypeName))
@@ -362,10 +366,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     long? maxVal = null;
                     using (var feed = Container.GetItemQueryIterator<long?>(maxCatQ))
                     {
-                        if (feed.HasMoreResults)
+                        while (feed.HasMoreResults)
                         {
                             var response = await feed.ReadNextAsync();
-                            maxVal = response.FirstOrDefault();
+                            var val = response.FirstOrDefault();
+                            if (val.HasValue && (!maxVal.HasValue || val.Value > maxVal.Value))
+                            {
+                                maxVal = val;
+                            }
                         }
                     }
 
@@ -563,7 +571,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     vtList.AddRange(response);
                 }
             }
-            var matchingVt = vtList.Where(v => string.Equals(v.VesselType?.TrimEnd(), vesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+            var matchingVt = vesselType != null
+                ? vtList.Where(v => v.VesselType != null && string.Equals(v.VesselType.TrimEnd(' '), vesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
+                : Enumerable.Empty<VesselTypeDocument>();
             int? vesselTypeId = CosmosLastRowHelper.GetLastRowValue(matchingVt, v => v.Id, v => (int?)v.Id, null);
 
             // 2. PartId: select @PartId=VesselTypePartMappingId from config.VesselTypePartMapping where IsDeleted=0 and IsActive=1 and VesselTypeId=@VesselTypeId and PartName=@PartName
@@ -580,7 +590,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     vtpList.AddRange(response);
                 }
-                var matchingVtp = vtpList.Where(p => string.Equals(p.PartName?.TrimEnd(), partName?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+                var matchingVtp = partName != null
+                    ? vtpList.Where(p => p.PartName != null && string.Equals(p.PartName.TrimEnd(' '), partName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
+                    : Enumerable.Empty<VesselTypePartMappingDocument>();
                 partId = CosmosLastRowHelper.GetLastRowValue(matchingVtp, p => p.VesselTypePartMappingId, p => (int?)p.VesselTypePartMappingId, null);
             }
 
@@ -603,7 +615,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     var response = await feed.ReadNextAsync();
                     vnsList.AddRange(response);
                 }
-                var matchingVns = vnsList.Where(s => string.Equals(s.SectionName?.TrimEnd(), sectionName?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+                var matchingVns = sectionName != null
+                    ? vnsList.Where(s => s.SectionName != null && string.Equals(s.SectionName.TrimEnd(' '), sectionName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
+                    : Enumerable.Empty<VesselTypeNormalSectionMappingDocument>();
                 sectionIdStr = CosmosLastRowHelper.GetLastRowValue(matchingVns, s => s.id, s => s.SectionMappingId, null);
             }
 
@@ -629,7 +643,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 }
 
                 var vnsWithSub = vnsList.Where(s => s.HasSubSection == true && !string.IsNullOrEmpty(s.SectionMappingId)).ToDictionary(s => s.SectionMappingId!, StringComparer.OrdinalIgnoreCase);
-                var matchingVss = vssList.Where(sub => !string.IsNullOrEmpty(sub.VesselTypeSectionId) && vnsWithSub.ContainsKey(sub.VesselTypeSectionId) && string.Equals(sub.SectionName?.TrimEnd(), sectionName?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+                var matchingVss = sectionName != null
+                    ? vssList.Where(sub => !string.IsNullOrEmpty(sub.VesselTypeSectionId) && vnsWithSub.ContainsKey(sub.VesselTypeSectionId) && sub.SectionName != null && string.Equals(sub.SectionName.TrimEnd(' '), sectionName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
+                    : Enumerable.Empty<VesselTypeSubSectionDocument>();
                 subSectionIdStr = CosmosLastRowHelper.GetLastRowValue(matchingVss, sub => sub.id, sub => sub.Id, null);
             }
 
@@ -677,7 +693,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                         ttList.AddRange(response);
                     }
                 }
-                var matchingTt = ttList.Where(t => string.Equals(t.TankType?.TrimEnd(), sectionName?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+                var matchingTt = sectionName != null
+                    ? ttList.Where(t => t.TankType != null && string.Equals(t.TankType.TrimEnd(' '), sectionName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
+                    : Enumerable.Empty<TankTypeDocument>();
                 int? tankTypeId = CosmosLastRowHelper.GetLastRowValue(matchingTt, t => t.Id, t => (int?)t.Id, null);
 
                 if (tankTypeId.HasValue)
@@ -714,8 +732,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var targetSecGuid = Guid.TryParse(sectionIdStr, out var sg) ? sg : (Guid?)null;
 
             var results = descriptions
-                .Where(d => string.Equals(d.VesselType?.TrimEnd(), vesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase) &&
-                            string.Equals(d.Description?.TrimEnd(), trimmedDesc, StringComparison.OrdinalIgnoreCase))
+                .Where(d => d.VesselType != null && vesselType != null && string.Equals(d.VesselType.TrimEnd(' '), vesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase) &&
+                            d.Description != null && trimmedDesc != null && string.Equals(d.Description.TrimEnd(' '), trimmedDesc.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                 .Select(d => new ImageDescriptions
                 {
                     Id = d.Id,
@@ -865,7 +883,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 foreach (var vsd in matchingVsd)
                 {
-                    var matchingDescr = allDescriptions.Where(d => d.CategoryId == vsd.CategoryId && d.ProjectId == 0 && string.Equals(d.VesselType?.TrimEnd(), vtName.TrimEnd(), StringComparison.OrdinalIgnoreCase)).ToList();
+                    var matchingDescr = allDescriptions.Where(d => d.CategoryId != null && d.CategoryId == vsd.CategoryId && d.ProjectId == 0 && d.VesselType != null && string.Equals(d.VesselType.TrimEnd(' '), vtName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)).ToList();
                     foreach (var descr in matchingDescr)
                     {
                         foreach (var vtp in matchingVtp)
@@ -906,7 +924,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 foreach (var tid in matchingTid)
                 {
-                    var matchingDescr = allDescriptions.Where(d => d.CategoryId == tid.CategoryId && (d.ProjectId == 0 || d.ProjectId == null) && string.Equals(d.VesselType?.TrimEnd(), vtName.TrimEnd(), StringComparison.OrdinalIgnoreCase)).ToList();
+                    var matchingDescr = allDescriptions.Where(d => d.CategoryId != null && d.CategoryId == tid.CategoryId && (d.ProjectId == 0 || d.ProjectId == null) && d.VesselType != null && string.Equals(d.VesselType.TrimEnd(' '), vtName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)).ToList();
                     foreach (var descr in matchingDescr)
                     {
                         foreach (var vtp in matchingVtp)
@@ -949,7 +967,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                     foreach (var vssd in matchingVssd)
                     {
-                        var matchingDescr = allDescriptions.Where(d => d.CategoryId == vssd.CategoryId && (d.ProjectId == 0 || d.ProjectId == null) && string.Equals(d.VesselType?.TrimEnd(), vtName.TrimEnd(), StringComparison.OrdinalIgnoreCase)).ToList();
+                        var matchingDescr = allDescriptions.Where(d => d.CategoryId != null && d.CategoryId == vssd.CategoryId && (d.ProjectId == 0 || d.ProjectId == null) && d.VesselType != null && string.Equals(d.VesselType.TrimEnd(' '), vtName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)).ToList();
                         foreach (var descr in matchingDescr)
                         {
                             foreach (var vpm in matchingVpm)
@@ -1024,7 +1042,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     vtList.AddRange(response);
                 }
             }
-            var matchingVt = vtList.Where(v => string.Equals(v.VesselType?.TrimEnd(), vesselType?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+            var matchingVt = vesselType != null
+                ? vtList.Where(v => v.VesselType != null && string.Equals(v.VesselType.TrimEnd(' '), vesselType.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
+                : Enumerable.Empty<VesselTypeDocument>();
             int vesselTypeId = CosmosLastRowHelper.GetLastRowValue(matchingVt, v => v.Id, v => v.Id, 0);
 
             var vtpContainer = ContainerFactory.GetContainer(CosmosContainers.Config_VesselTypePartMapping);
@@ -1039,7 +1059,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     vtpList.AddRange(response);
                 }
             }
-            var matchingVtp = vtpList.Where(p => string.Equals(p.PartName?.TrimEnd(), templateName?.TrimEnd(), StringComparison.OrdinalIgnoreCase));
+            var matchingVtp = templateName != null
+                ? vtpList.Where(p => p.PartName != null && string.Equals(p.PartName.TrimEnd(' '), templateName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
+                : Enumerable.Empty<VesselTypePartMappingDocument>();
             int templateId = CosmosLastRowHelper.GetLastRowValue(matchingVtp, p => p.VesselTypePartMappingId, p => p.VesselTypePartMappingId, 0);
 
             if (templateId == 0 || vesselType == null)

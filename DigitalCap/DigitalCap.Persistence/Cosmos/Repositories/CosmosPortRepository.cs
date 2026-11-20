@@ -29,8 +29,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             }
             else
             {
-                query = new QueryDefinition("SELECT * FROM c WHERE CONTAINS(c.PortName, @searchText, true)")
-                    .WithParameter("@searchText", searchText);
+                if (searchText.Length > 500)
+                {
+                    searchText = searchText.Substring(0, 500);
+                }
+
+                var pattern = LikeToRegex(searchText);
+                query = new QueryDefinition("SELECT * FROM c WHERE RegexMatch(c.PortName, @pattern, 'i')")
+                    .WithParameter("@pattern", pattern);
             }
 
             var documents = await QueryAsync(query);
@@ -41,6 +47,52 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 Name = d.PortName!
                 // CountryCode is not returned by CAP.Port_Search: leave null
             }).ToList();
+        }
+
+        private static string LikeToRegex(string input)
+        {
+            var sb = new System.Text.StringBuilder();
+            int i = 0;
+            while (i < input.Length)
+            {
+                char ch = input[i];
+                if (ch == '%')
+                {
+                    sb.Append(".*");
+                    i++;
+                }
+                else if (ch == '_')
+                {
+                    sb.Append(".");
+                    i++;
+                }
+                else if (ch == '[')
+                {
+                    int closeIdx = input.IndexOf(']', i + 1);
+                    if (closeIdx > i + 1)
+                    {
+                        var bracketContent = input.Substring(i, closeIdx - i + 1);
+                        sb.Append(bracketContent);
+                        i = closeIdx + 1;
+                    }
+                    else
+                    {
+                        sb.Append(@"\[");
+                        i++;
+                    }
+                }
+                else if (@"\^$.|?*+(){}".Contains(ch))
+                {
+                    sb.Append('\\').Append(ch);
+                    i++;
+                }
+                else
+                {
+                    sb.Append(ch);
+                    i++;
+                }
+            }
+            return ".*" + sb.ToString() + ".*";
         }
 
         /// <summary>

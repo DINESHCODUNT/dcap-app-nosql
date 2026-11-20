@@ -54,17 +54,17 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     if (project != null)
                     {
                         // (a) LeadSurveyor = username (ignore case and trailing spaces)
-                        if (!string.IsNullOrEmpty(project.LeadSurveyor) &&
-                            string.Equals(project.LeadSurveyor.TrimEnd(), username.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                        if (username != null && project.LeadSurveyor != null &&
+                            string.Equals(project.LeadSurveyor.TrimEnd(' '), username.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                         {
                             roleIds.Add("64cb13e1-f634-4ddd-ba73-90b8df56956f");
                         }
 
                         // (b) SecondSurveyor LIKE '%username%'
-                        if (!string.IsNullOrEmpty(project.SecondSurveyor))
+                        if (username != null && project.SecondSurveyor != null)
                         {
                             var regexPattern = LikeToRegex(username);
-                            if (Regex.IsMatch(project.SecondSurveyor, regexPattern, RegexOptions.IgnoreCase))
+                            if (regexPattern != null && Regex.IsMatch(project.SecondSurveyor, regexPattern, RegexOptions.IgnoreCase))
                             {
                                 roleIds.Add("7cb843e6-8b1d-4359-ab16-bad121f36db3");
                             }
@@ -73,36 +73,39 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 }
 
                 // (c) AspNetRoles for AspNetUsers where UserName = username
-                var aspNetUsersContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUsers);
-                var uQuery = new QueryDefinition("SELECT c.id FROM c WHERE STRINGEQUALS(c.UserName, @u, true)")
-                    .WithParameter("@u", username);
-
-                var userIds = new List<string>();
-                using (var feed = aspNetUsersContainer.GetItemQueryIterator<AspNetUserDocument>(uQuery))
+                if (username != null)
                 {
-                    while (feed.HasMoreResults)
-                    {
-                        var response = await feed.ReadNextAsync();
-                        userIds.AddRange(response.Select(u => u.id));
-                    }
-                }
+                    var aspNetUsersContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUsers);
+                    var uQuery = new QueryDefinition("SELECT c.id FROM c WHERE STRINGEQUALS(RTRIM(c.UserName), @u, true)")
+                        .WithParameter("@u", username.TrimEnd(' '));
 
-                if (userIds.Count > 0)
-                {
-                    var lowerUserIds = userIds.Select(id => id.ToLowerInvariant()).ToList();
-                    var userRolesContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUserRoles);
-                    var urQuery = new QueryDefinition("SELECT c.RoleId FROM c WHERE ARRAY_CONTAINS(@userIds, LOWER(c.UserId))")
-                        .WithParameter("@userIds", lowerUserIds);
-
-                    using var feed = userRolesContainer.GetItemQueryIterator<AspNetUserRoleDocument>(urQuery);
-                    while (feed.HasMoreResults)
+                    var userIds = new List<string>();
+                    using (var feed = aspNetUsersContainer.GetItemQueryIterator<AspNetUserDocument>(uQuery))
                     {
-                        var response = await feed.ReadNextAsync();
-                        foreach (var ur in response)
+                        while (feed.HasMoreResults)
                         {
-                            if (!string.IsNullOrWhiteSpace(ur.RoleId))
+                            var response = await feed.ReadNextAsync();
+                            userIds.AddRange(response.Select(u => u.id));
+                        }
+                    }
+
+                    if (userIds.Count > 0)
+                    {
+                        var lowerUserIds = userIds.Select(id => id.ToLowerInvariant()).ToList();
+                        var userRolesContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUserRoles);
+                        var urQuery = new QueryDefinition("SELECT c.RoleId FROM c WHERE ARRAY_CONTAINS(@userIds, LOWER(c.UserId))")
+                            .WithParameter("@userIds", lowerUserIds);
+
+                        using var feed = userRolesContainer.GetItemQueryIterator<AspNetUserRoleDocument>(urQuery);
+                        while (feed.HasMoreResults)
+                        {
+                            var response = await feed.ReadNextAsync();
+                            foreach (var ur in response)
                             {
-                                roleIds.Add(ur.RoleId);
+                                if (!string.IsNullOrWhiteSpace(ur.RoleId))
+                                {
+                                    roleIds.Add(ur.RoleId);
+                                }
                             }
                         }
                     }
@@ -114,9 +117,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 }
 
                 // Step 2: Permissions matching viewname
+                if (viewname == null)
+                {
+                    return null!;
+                }
+
                 var userPermsContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_UserPermissions);
                 var permQuery = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.PermissionName), @vn, true)")
-                    .WithParameter("@vn", viewname.TrimEnd());
+                    .WithParameter("@vn", viewname.TrimEnd(' '));
 
                 var permissions = new List<UserPermissionsDocument>();
                 using (var feed = userPermsContainer.GetItemQueryIterator<UserPermissionsDocument>(permQuery))
@@ -188,12 +196,17 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// </summary>
         public async Task<List<int>> GetCurrentUserProjects(string username)
         {
+            if (username == null)
+            {
+                return new List<int>();
+            }
+
             var pattern = LikeToRegex(username);
             var query = new QueryDefinition(@"
                 SELECT c.Id FROM c 
                 WHERE (IS_STRING(c.LeadSurveyor) AND STRINGEQUALS(RTRIM(c.LeadSurveyor), @username, true))
                    OR (IS_STRING(c.SecondSurveyor) AND RegexMatch(c.SecondSurveyor, @pattern, 'i') AND c.IsDeleted = false)")
-                .WithParameter("@username", username.TrimEnd())
+                .WithParameter("@username", username.TrimEnd(' '))
                 .WithParameter("@pattern", pattern);
 
             var projectsContainer = ContainerFactory.GetContainer(CosmosContainers.CAP_Projects);
@@ -272,9 +285,23 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// </summary>
         public async Task<UserRolePermission> GetRolePermissionById(string id)
         {
-            var g = Guid.Parse(id);
+            if (id == null)
+            {
+                return null!;
+            }
+            if (!Guid.TryParse(id, out var g))
+            {
+                throw new InvalidOperationException("Conversion failed when converting from a character string to uniqueidentifier.");
+            }
             var idStr = g.ToString("D").ToLowerInvariant();
             var doc = await ReadAsync(idStr, new PartitionKey(idStr));
+            if (doc == null)
+            {
+                var q = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(c.Id, @id, true)")
+                    .WithParameter("@id", idStr);
+                var list = await QueryAsync(q);
+                doc = list.FirstOrDefault();
+            }
             if (doc == null)
             {
                 return null!;
@@ -338,28 +365,49 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             {
                 return false;
             }
-            if (templates.Count > 1)
+
+            var createdDocs = new List<RolePermissionsMappingDocument>();
+            try
             {
-                throw new InvalidOperationException($"{templates.Count} template rows found for PermissionId '{rolepermission.PermissionId}'.");
+                for (int i = 0; i < templates.Count; i++)
+                {
+                    var template = templates[i];
+                    var technicalId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+                    var newDoc = new RolePermissionsMappingDocument
+                    {
+                        id = technicalId,
+                        Id = rolepermission.Id,
+                        RoleId = rolepermission.RoleId,
+                        PermissionId = rolepermission.PermissionId,
+                        IsReadable = rolepermission.IsReadable,
+                        IsEditable = rolepermission.IsEditable,
+                        IsDeleted = rolepermission.IsDeleted,
+                        ReadExist = template.ReadExist,
+                        EditExist = template.EditExist,
+                        DeleteExist = template.DeleteExist
+                    };
+
+                    await CreateAsync(newDoc, new PartitionKey(newDoc.id));
+                    createdDocs.Add(newDoc);
+                }
+
+                return createdDocs.Count > 0;
             }
-
-            var template = templates[0];
-            var newDoc = new RolePermissionsMappingDocument
+            catch
             {
-                id = rolepermission.Id.ToString("D").ToLowerInvariant(),
-                Id = rolepermission.Id,
-                RoleId = rolepermission.RoleId,
-                PermissionId = rolepermission.PermissionId,
-                IsReadable = rolepermission.IsReadable,
-                IsEditable = rolepermission.IsEditable,
-                IsDeleted = rolepermission.IsDeleted,
-                ReadExist = template.ReadExist,
-                EditExist = template.EditExist,
-                DeleteExist = template.DeleteExist
-            };
-
-            await CreateAsync(newDoc, new PartitionKey(newDoc.id));
-            return true;
+                // SQL INSERT...SELECT is all-or-nothing: if a create fails, delete created documents, then rethrow
+                foreach (var doc in createdDocs)
+                {
+                    try
+                    {
+                        await DeleteAsync(doc.id, new PartitionKey(doc.id));
+                    }
+                    catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                    }
+                }
+                throw;
+            }
         }
 
         /// <summary>
@@ -425,7 +473,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// </summary>
         public async Task<List<UserRolePermissionViewModel>> GetRolePermission(string id)
         {
-            var roleGuid = Guid.Parse(id);
+            if (id == null)
+            {
+                return new List<UserRolePermissionViewModel>();
+            }
+            if (!Guid.TryParse(id, out var roleGuid))
+            {
+                throw new InvalidOperationException("Conversion failed when converting from a character string to uniqueidentifier.");
+            }
             var roleIdStr = roleGuid.ToString("D").ToLowerInvariant();
 
             var query = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(c.RoleId, @roleId, true)")
@@ -540,9 +595,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         }
 
         #region Helpers
-        private static string LikeToRegex(string input)
+        private static string? LikeToRegex(string? input)
         {
-            if (string.IsNullOrEmpty(input))
+            if (input == null)
+            {
+                return null;
+            }
+
+            if (input.Length == 0)
             {
                 return ".*";
             }

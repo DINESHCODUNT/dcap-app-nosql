@@ -1,3 +1,4 @@
+using DigitalCap.Core.Helpers.Constants;
 using DigitalCap.Core.DTO;
 using DigitalCap.Core.Enumerations;
 using DigitalCap.Core.Interfaces.Repository;
@@ -91,7 +92,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             try
             {
                 var createdBy = (await _userManager.FindByEmailAsync(currentUser))?.Id;
-                var user = currentUser ?? "SYSTEM";
+                var user = string.IsNullOrEmpty(currentUser) ? "SYSTEM" : currentUser;
 
                 var projectId = await Sp_Create_Project(model, user, createdBy, isCap2: true);
                 Commit();
@@ -213,7 +214,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     DrydockStart = GetNullableValue<DateTime>(result, "DrydockStart"),
                     DrydockEnd = GetNullableValue<DateTime>(result, "DrydockEnd"),
                     SpecialHull = GetValue<bool>(result, "SpecialHull", true),
-                    Fatigue = GetValue<bool>(result, "FatigueAnalysis", true),
+                    Fatigue = GetValue<bool>(result, "Fatigue", true),
                     ExpenseMarkup = GetNullableValue<int>(result, "ExpenseMarkup"),
                     SurveyDayrateClient = GetNullableValue<decimal>(result, "SurveyDayrateClient"),
                     SurveyDayrateAbs = GetNullableValue<decimal>(result, "SurveyDayrateAbs"),
@@ -241,7 +242,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     PocPhone = GetValue<string>(result, "PocPhone")!,
                     IMO = GetNullableValue<int>(result, "IMO"),
                     VesselName = GetValue<string>(result, "VesselName")!,
-                    ShipType = (ShipType)GetValue<int>(result, "VesselTypeId", 0),
+                    ShipType = GetValue<int>(result, "ShipType", 0) != 0 ? (ShipType)GetValue<int>(result, "ShipType", 0) : default(ShipType),
                     WCN = GetValue<string>(result, "WCN")!,
                     ClassSociety = GetValue<string>(result, "ClassSociety")?.Split(',')!,
                     AbsClassID = GetValue<string>(result, "AbsClassID")!,
@@ -264,7 +265,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     ClientProfileId = GetNullableValue<Guid>(result, "ClientProfileId"),
                     BillToClientProfileId = GetNullableValue<Guid>(result, "BillToClientProfileId"),
                     BillToWCN = GetValue<string>(result, "BillToWCN")!,
-                    LeadSurveyor = GetValue<string>(result, "CreatedByDisplayName") ?? GetValue<string>(result, "LeadSurveyor")!,
+                    ProjectStatusName = GetValue<string>(result, "ProjectStatusName"),
+                    DrydockLocationName = GetValue<string>(result, "DrydockLocationName"),
+                    LeadSurveyor = GetValue<string>(result, "LeadSurveyor")!,
                     LeadSurveyorEID = GetValue<string>(result, "LeadSurveyorEID")!,
                     SecondSurveyor = GetValue<string>(result, "SecondSurveyor")?.Split(',')!,
                     SecondSurveyorEID = GetValue<string>(result, "SecondSurveyorEID")!,
@@ -274,15 +277,22 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     FourthSurveyorEID = GetValue<string>(result, "FourthSurveyorEID")!,
                     AdditionalSurveyors = GetValue<bool>(result, "AdditionalSurveyors", false),
                     ClassSocietyOther = GetValue<string>(result, "ClassSocietyOther")!,
-                    CreatedBy = GetValue<string>(result, "CreatedBy")!,
-                    StatusChangedBy = GetValue<string>(result, "StatusChangedByDisplayName") ?? GetValue<string>(result, "StatusChangedBy")!,
+                    CreatedBy = GetValue<string>(result, "CreatedByDisplayName")!,
+                    StatusChangedBy = GetValue<string>(result, "StatusChangedBy")!,
                     StatusChangedDate = GetNullableValue<DateTimeOffset>(result, "StatusChangedDate"),
+                    PercentComplete = (byte)GetValue<int>(result, "PercentComplete", 0),
                     VesselType = GetValue<string>(result, "VesselType")!,
                     CopyingVesselID = GetNullableValue<int>(result, "CopyingVesselID"),
                     IsDefaultTank = GetNullableValue<bool>(result, "IsDefaultTank"),
                     TankVesselType = GetValue<string>(result, "TankVesselType")!,
-                    TankVesselIMO = GetValue<int>(result, "TankVesselIMO", 0)
+                    TankVesselIMO = GetValue<int>(result, "TankVesselIMO", 0),
+                    IsReadOnlyEnabled = GetValue<bool>(result, "IsReadOnlyEnabled", false)
                 };
+
+                if (!string.IsNullOrWhiteSpace(project.ProjectStatusName))
+                {
+                    project.ProjectStatusColor = DigitalCap.Core.Helpers.StatusColorHelper.GetProjectStatusColor(project.ProjectStatusName);
+                }
 
                 return project;
             }
@@ -298,9 +308,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             try
             {
                 var user = currentUser ?? "SYSTEM";
-                await Sp_Update_Project_Percent_Complete(projectId, percentComplete, user);
+                var affected = await Sp_Update_Project_Percent_Complete(projectId, percentComplete, user);
                 Commit();
-                return 1;
+                return affected;
             }
             catch (Exception ex)
             {
@@ -326,7 +336,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             try
             {
-                var user = currentUser ?? "SYSTEM";
+                var user = string.IsNullOrEmpty(currentUser) ? "SYSTEM" : currentUser;
                 await Sp_Update_Project(model, user);
                 Commit();
             }
@@ -455,7 +465,16 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             try
             {
                 var result = await Sp_Read_Projects_Grid_Export();
-                return result;
+                var list = result ?? new List<AllProjectsGridExport>();
+                foreach (var p in list)
+                {
+                    if (string.IsNullOrWhiteSpace(p.CapRegion) ||
+                        !FormValues.CAPRegion.Contains(p.CapRegion))
+                    {
+                        p.CapRegion = FormValues.CAPRegion.FirstOrDefault() ?? "";
+                    }
+                }
+                return list;
             }
             catch (Exception ex)
             {
@@ -508,15 +527,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task<List<Project>> GetAllProjects(string user = null!)
         {
-            try
-            {
-                var result = await Sp_Read_Project_Projects();
-                return result;
-            }
-            catch (Exception)
-            {
-                throw;
-            }
+            // KNOWN SQL BUG (reported to dcap-app team)
+            throw new InvalidOperationException("Procedure or function Read_Project has too many arguments specified.");
         }
 
         public async Task<ProjectStats> GetProjectStats()
@@ -555,6 +567,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         #region Stored Procedure Helpers
 
+        private static string? CutString(string? str, int maxLen) =>
+            str != null && str.Length > maxLen ? str.Substring(0, maxLen) : str;
+
         /// <summary>
         /// Replaces [CAP].[Read_ProjectExists_ByImoNumber].
         /// </summary>
@@ -581,15 +596,15 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 id = newId.ToString(),
                 ID = newId,
                 IdProp = newId,
-                Name = model.Name,
+                Name = CutString(model.Name, 250),
                 PIDNumber = model.PIDNumber,
-                CapRegion = model.CapRegion,
-                CapScope = model.CapScope,
-                CapScopeOther = model.CapScopeOther,
+                CapRegion = CutString(model.CapRegion, 150),
+                CapScope = CutString(model.CapScope, 150),
+                CapScopeOther = CutString(model.CapScopeOther, 150),
                 CapType = (int)model.CapType,
                 DrydockLocation = model.DrydockLocation,
-                DrydockStart = model.DrydockStart,
-                DrydockEnd = model.DrydockEnd,
+                DrydockStart = model.DrydockStart?.Date,
+                DrydockEnd = model.DrydockEnd?.Date,
                 SpecialHull = model.SpecialHull,
                 FatigueAnalysis = model.Fatigue,
                 ExpenseMarkup = model.ExpenseMarkup,
@@ -597,63 +612,63 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 SurveyDayRateAbs = model.SurveyDayrateAbs,
                 SedRate1 = model.SedRate1,
                 SedRate2 = model.SedRate2,
-                AgreementNumber = model.AgreementNumber,
+                AgreementNumber = CutString(model.AgreementNumber, 150),
                 ProposalRev = model.ProposalRev ?? 0,
                 CapContractValue = model.CapContractValue,
-                AgreementOwner = model.AgreementOwner,
-                AgreementDate = model.AgreementDate,
-                AgreementSignedDate = model.AgreementSignedDate,
-                CertificateGrade = model.CertificateGrade,
-                ProjectComments = model.ProjectComments,
-                CompanyName = model.CompanyName,
-                CompanyAddress = model.CompanyAddress,
-                CompanyBillingEmail = model.CompanyBillingEmail,
-                CompanyBillingSystemUrl = model.CompanyBillingSystemUrl,
+                AgreementOwner = CutString(model.AgreementOwner, 150),
+                AgreementDate = model.AgreementDate?.Date,
+                AgreementSignedDate = model.AgreementSignedDate?.Date,
+                CertificateGrade = CutString(model.CertificateGrade, 150),
+                ProjectComments = CutString(model.ProjectComments, 4000),
+                CompanyName = CutString(model.CompanyName, 250),
+                CompanyAddress = CutString(model.CompanyAddress, 250),
+                CompanyBillingEmail = CutString(model.CompanyBillingEmail, 250),
+                CompanyBillingSystemUrl = CutString(model.CompanyBillingSystemUrl, 250),
                 BillSameAsCapClient = model.BillSameAsCapClient,
-                BillToCompanyName = model.BillToCompanyName,
-                BillToCompanyAddress = model.BillToCompanyAddress,
-                BillToCompanyEmail = model.BillToCompanyEmail,
-                BillToCompanyBillingUrl = model.BillToCompanyBillingUrl,
-                PocName = model.PocName,
-                PocEmail = model.PocEmail,
-                PocPhone = model.PocPhone,
+                BillToCompanyName = CutString(model.BillToCompanyName, 150),
+                BillToCompanyAddress = CutString(model.BillToCompanyAddress, 150),
+                BillToCompanyEmail = CutString(model.BillToCompanyEmail, 150),
+                BillToCompanyBillingUrl = CutString(model.BillToCompanyBillingUrl, 250),
+                PocName = CutString(model.PocName, 150),
+                PocEmail = CutString(model.PocEmail, 150),
+                PocPhone = CutString(model.PocPhone, 150),
                 IMO = model.IMO,
-                VesselName = model.VesselName,
-                ShipType = model.ShipType != default(ShipType) ? ((int)model.ShipType).ToString() : null,
-                WCN = model.WCN,
-                ClassSociety = model.ClassSociety != null ? string.Join(",", model.ClassSociety) : null,
-                AbsClassID = model.AbsClassID,
+                VesselName = CutString(model.VesselName, 255),
+                ShipType = model.ShipType != default(ShipType) ? (int)model.ShipType : (int?)null,
+                WCN = CutString(model.WCN, 150),
+                ClassSociety = CutString(model.ClassSociety != null ? string.Join(",", model.ClassSociety) : null, 400),
+                AbsClassID = CutString(model.AbsClassID, 150),
                 SisterVessel = model.SisterVessel,
-                SisterVesselImoNumber = model.SisterVesselImoNumber,
-                SisterVesselName = model.SisterVesselName,
-                Builder = model.Builder,
-                HullNumber = model.HullNumber,
+                SisterVesselImoNumber = CutString(model.SisterVesselImoNumber, 250),
+                SisterVesselName = CutString(model.SisterVesselName, 250),
+                Builder = CutString(model.Builder, 250),
+                HullNumber = CutString(model.HullNumber, 150),
                 MonthBuilt = model.MonthBuilt,
                 YearBuilt = model.YearBuilt,
                 LengthOverall = model.LengthOverall,
-                CRMOpportunityNumber = model.CRMOpportunityNumber,
+                CRMOpportunityNumber = CutString(model.CRMOpportunityNumber, 20),
                 ProjectStatus = status,
                 ProjectPriority = null,
-                CreatedDate = DateTime.UtcNow,
-                LastModifiedBy = user,
-                PotentialDrydockDate = model.PotentialDrydockDate,
-                SurveyFirstVisit = model.SurveyFirstVisit,
-                SurveyLastVisit = model.SurveyLastVisit,
+                CreatedDate = DateTime.UtcNow.Date,
+                LastModifiedBy = CutString(user, 250),
+                PotentialDrydockDate = model.PotentialDrydockDate?.Date,
+                SurveyFirstVisit = model.SurveyFirstVisit?.Date,
+                SurveyLastVisit = model.SurveyLastVisit?.Date,
                 ClientProfileId = model.ClientProfileId,
                 BillToClientProfileId = model.BillToClientProfileId,
-                BillToWCN = model.BillToWCN,
-                LeadSurveyor = model.LeadSurveyor,
-                LeadSurveyorEID = model.LeadSurveyorEID,
-                SecondSurveyor = model.SecondSurveyor != null ? string.Join(",", model.SecondSurveyor) : null,
-                SecondSurveyorEID = model.SecondSurveyorEID,
-                ThirdSurveyor = model.ThirdSurveyor,
-                ThirdSurveyorEID = model.ThirdSurveyorEID,
-                FourthSurveyor = model.FourthSurveyor,
-                FourthSurveyorEID = model.FourthSurveyorEID,
+                BillToWCN = CutString(model.BillToWCN, 150),
+                LeadSurveyor = CutString(model.LeadSurveyor, 150),
+                LeadSurveyorEID = CutString(model.LeadSurveyorEID, 150),
+                SecondSurveyor = CutString(model.SecondSurveyor != null ? string.Join(",", model.SecondSurveyor) : null, 150),
+                SecondSurveyorEID = CutString(model.SecondSurveyorEID, 150),
+                ThirdSurveyor = CutString(model.ThirdSurveyor, 150),
+                ThirdSurveyorEID = CutString(model.ThirdSurveyorEID, 150),
+                FourthSurveyor = CutString(model.FourthSurveyor, 150),
+                FourthSurveyorEID = CutString(model.FourthSurveyorEID, 150),
                 AdditionalSurveyors = model.AdditionalSurveyors,
-                ClassSocietyOther = model.ClassSocietyOther,
-                CreatedBy = createdBy,
-                VesselType = model.VesselType,
+                ClassSocietyOther = CutString(model.ClassSocietyOther, 400),
+                CreatedBy = CutString(createdBy, 450),
+                VesselType = CutString(model.VesselType, 450),
                 CopyingVesselID = model.CopyingVesselID,
                 IsDefaultTank = model.IsDefaultTank,
                 TankVesselType = model.TankVesselType,
@@ -683,7 +698,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             using (var feed = _ptsContainer.GetItemQueryIterator<ProjectTaskStatusDocument>(existingQuery, requestOptions: new QueryRequestOptions { PartitionKey = pk }))
             {
-                if (feed.HasMoreResults)
+                while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
                     if (resp.Count > 0)
@@ -811,10 +826,15 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var q = new QueryDefinition("SELECT TOP 1 c.ProviderDisplayName FROM c WHERE c.UserId = @uid")
                     .WithParameter("@uid", p.CreatedBy);
                 using var feed = _userLoginsContainer.GetItemQueryIterator<AspNetUserLoginDocument>(q, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(p.CreatedBy) });
-                if (feed.HasMoreResults)
+                while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    createdByDisplayName = resp.FirstOrDefault()?.ProviderDisplayName;
+                    var found = resp.FirstOrDefault()?.ProviderDisplayName;
+                    if (found != null)
+                    {
+                        createdByDisplayName = found;
+                        break;
+                    }
                 }
             }
 
@@ -824,24 +844,38 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var q = new QueryDefinition("SELECT TOP 1 c.ProviderDisplayName FROM c WHERE c.UserId = @uid")
                     .WithParameter("@uid", p.StatusChangedBy);
                 using var feed = _userLoginsContainer.GetItemQueryIterator<AspNetUserLoginDocument>(q, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(p.StatusChangedBy) });
-                if (feed.HasMoreResults)
+                while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    statusChangedByDisplayName = resp.FirstOrDefault()?.ProviderDisplayName;
+                    var found = resp.FirstOrDefault()?.ProviderDisplayName;
+                    if (found != null)
+                    {
+                        statusChangedByDisplayName = found;
+                        break;
+                    }
                 }
             }
 
             // VesselType
             int? vesselTypeId = null;
-            if (!string.IsNullOrEmpty(p.VesselType))
+            if (p.VesselType != null)
             {
-                var q = new QueryDefinition("SELECT TOP 1 c.Id FROM c WHERE STRINGEQUALS(c.VesselType, @vt, true)")
-                    .WithParameter("@vt", p.VesselType);
+                var vtTrim = p.VesselType.TrimEnd(' ');
+                var q = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.VesselType), @vt, true)")
+                    .WithParameter("@vt", vtTrim);
                 using var feed = _vesselTypeContainer.GetItemQueryIterator<VesselTypeDocument>(q);
-                if (feed.HasMoreResults)
+                while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    vesselTypeId = resp.FirstOrDefault()?.Id;
+                    foreach (var vt in resp)
+                    {
+                        if (vt.VesselType != null && string.Equals(vt.VesselType.TrimEnd(' '), vtTrim, StringComparison.OrdinalIgnoreCase))
+                        {
+                            vesselTypeId = vt.Id;
+                            break;
+                        }
+                    }
+                    if (vesselTypeId.HasValue) break;
                 }
             }
 
@@ -930,7 +964,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 ["TankVesselIMO"] = p.TankVesselIMO,
                 ["CreatedByDisplayName"] = createdByDisplayName,
                 ["StatusChangedByDisplayName"] = statusChangedByDisplayName,
-                ["VesselTypeId"] = vesselTypeId
+                ["VesselTypeId"] = vesselTypeId,
+                ["PercentComplete"] = p.PercentComplete
             };
 
             return dict;
@@ -939,17 +974,26 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// <summary>
         /// Replaces [CAP].[Update_Project_Percent_Complete].
         /// </summary>
-        private async Task Sp_Update_Project_Percent_Complete(int id, byte percentComplete, string user)
+        private async Task<int> Sp_Update_Project_Percent_Complete(int id, byte percentComplete, string user)
         {
             var idStr = id.ToString();
             var pk = new PartitionKey(idStr);
-            var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, pk);
-            if (resp.Resource != null)
+            try
             {
-                var doc = resp.Resource;
-                doc.PercentComplete = percentComplete;
-                doc.LastModifiedBy = user;
-                await Container.ReplaceItemAsync(doc, idStr, pk);
+                var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, pk);
+                if (resp.Resource != null)
+                {
+                    var doc = resp.Resource;
+                    doc.PercentComplete = percentComplete;
+                    doc.LastModifiedBy = user;
+                    await Container.ReplaceItemAsync(doc, idStr, pk);
+                    return 1;
+                }
+                return 0;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return 0;
             }
         }
 
@@ -975,7 +1019,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 if (p.Name == null)
                     continue;
 
-                if (!string.Equals(p.Name.TrimEnd(), projectName.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(p.Name.TrimEnd(' '), projectName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 if (p.ShipType == null)
@@ -1010,89 +1054,98 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             var idStr = model.Id.ToString();
             var pk = new PartitionKey(idStr);
-            var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, pk);
-            if (resp.Resource == null)
-                return;
+            ProjectDocument? doc = null;
+            try
+            {
+                var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, pk);
+                doc = resp.Resource;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Missing project: SQL updates 0 rows and carries on with recalc and activity
+            }
 
-            var doc = resp.Resource;
-            doc.Name = model.Name;
-            doc.PIDNumber = model.PIDNumber;
-            doc.CapRegion = model.CapRegion;
-            doc.CapScope = model.CapScope;
-            doc.CapType = (int)model.CapType;
-            doc.DrydockLocation = model.DrydockLocation;
-            doc.DrydockStart = model.DrydockStart;
-            doc.DrydockEnd = model.DrydockEnd;
-            doc.SpecialHull = model.SpecialHull;
-            doc.FatigueAnalysis = model.Fatigue;
-            doc.ExpenseMarkup = model.ExpenseMarkup;
-            doc.SurveyDayRateClient = model.SurveyDayrateClient;
-            doc.SurveyDayRateAbs = model.SurveyDayrateAbs;
-            doc.SedRate1 = model.SedRate1;
-            doc.SedRate2 = model.SedRate2;
-            doc.AgreementNumber = model.AgreementNumber;
-            doc.ProposalRev = model.ProposalRev ?? 0;
-            doc.CapContractValue = model.CapContractValue;
-            doc.AgreementOwner = model.AgreementOwner;
-            doc.AgreementDate = model.AgreementDate;
-            doc.AgreementSignedDate = model.AgreementSignedDate;
-            doc.CertificateGrade = model.CertificateGrade;
-            doc.ProjectComments = model.ProjectComments;
-            doc.CompanyName = model.CompanyName;
-            doc.CompanyAddress = model.CompanyAddress;
-            doc.CompanyBillingEmail = model.CompanyBillingEmail;
-            doc.CompanyBillingSystemUrl = model.CompanyBillingSystemUrl;
-            doc.BillSameAsCapClient = model.BillSameAsCapClient;
-            doc.BillToCompanyName = model.BillToCompanyName;
-            doc.BillToCompanyAddress = model.BillToCompanyAddress;
-            doc.BillToCompanyEmail = model.BillToCompanyEmail;
-            doc.BillToCompanyBillingUrl = model.BillToCompanyBillingUrl;
-            doc.PocName = model.PocName;
-            doc.PocEmail = model.PocEmail;
-            doc.PocPhone = model.PocPhone;
-            doc.IMO = model.IMO;
-            doc.VesselName = model.VesselName;
-            doc.ShipType = model.ShipType != default(ShipType) ? ((int)model.ShipType).ToString() : null;
-            doc.WCN = model.WCN;
-            doc.ClassSociety = model.ClassSociety != null ? string.Join(",", model.ClassSociety) : null;
-            doc.AbsClassID = model.AbsClassID;
-            doc.SisterVessel = model.SisterVessel;
-            doc.SisterVesselImoNumber = model.SisterVesselImoNumber;
-            doc.SisterVesselName = model.SisterVesselName;
-            doc.Builder = model.Builder;
-            doc.HullNumber = model.HullNumber;
-            doc.MonthBuilt = model.MonthBuilt;
-            doc.YearBuilt = model.YearBuilt;
-            doc.LengthOverall = model.LengthOverall;
-            doc.CRMOpportunityNumber = model.CRMOpportunityNumber;
-            doc.ProjectStatus = model.ProjectStatus;
-            doc.ProjectPriority = model.ProjectPriority;
-            doc.ModifiedDate = DateTime.UtcNow;
-            doc.LastModifiedBy = user;
-            doc.PotentialDrydockDate = model.PotentialDrydockDate;
-            doc.SurveyFirstVisit = model.SurveyFirstVisit;
-            doc.SurveyLastVisit = model.SurveyLastVisit;
-            doc.ClientProfileId = model.ClientProfileId;
-            doc.BillToClientProfileId = model.BillToClientProfileId;
-            doc.BillToWCN = model.BillToWCN;
-            doc.LeadSurveyor = model.LeadSurveyor;
-            doc.LeadSurveyorEID = model.LeadSurveyorEID;
-            doc.SecondSurveyor = model.SecondSurveyor != null ? string.Join(",", model.SecondSurveyor) : null;
-            doc.SecondSurveyorEID = model.SecondSurveyorEID;
-            doc.ThirdSurveyor = model.ThirdSurveyor;
-            doc.ThirdSurveyorEID = model.ThirdSurveyorEID;
-            doc.FourthSurveyor = model.FourthSurveyor;
-            doc.FourthSurveyorEID = model.FourthSurveyorEID;
-            doc.AdditionalSurveyors = model.AdditionalSurveyors;
-            doc.ClassSocietyOther = model.ClassSocietyOther;
-            doc.CapScopeOther = model.CapScopeOther;
-            doc.VesselType = model.VesselType;
-            doc.CopyingVesselID = model.CopyingVesselID;
-            doc.IsDefaultTank = model.IsDefaultTank;
-            doc.TankVesselType = model.TankVesselType;
-            doc.TankVesselIMO = model.TankVesselIMO;
+            if (doc != null)
+            {
+                doc.Name = CutString(model.Name, 250);
+                doc.PIDNumber = model.PIDNumber;
+                doc.CapRegion = CutString(model.CapRegion, 150);
+                doc.CapScope = CutString(model.CapScope, 150);
+                doc.CapType = (int)model.CapType;
+                doc.DrydockLocation = model.DrydockLocation;
+                doc.DrydockStart = model.DrydockStart?.Date;
+                doc.DrydockEnd = model.DrydockEnd?.Date;
+                doc.SpecialHull = model.SpecialHull;
+                doc.FatigueAnalysis = model.Fatigue;
+                doc.ExpenseMarkup = model.ExpenseMarkup;
+                doc.SurveyDayRateClient = model.SurveyDayrateClient;
+                doc.SurveyDayRateAbs = model.SurveyDayrateAbs;
+                doc.SedRate1 = model.SedRate1;
+                doc.SedRate2 = model.SedRate2;
+                doc.AgreementNumber = CutString(model.AgreementNumber, 150);
+                doc.ProposalRev = model.ProposalRev ?? 0;
+                doc.CapContractValue = model.CapContractValue;
+                doc.AgreementOwner = CutString(model.AgreementOwner, 150);
+                doc.AgreementDate = model.AgreementDate?.Date;
+                doc.AgreementSignedDate = model.AgreementSignedDate?.Date;
+                doc.CertificateGrade = CutString(model.CertificateGrade, 150);
+                doc.ProjectComments = CutString(model.ProjectComments, 4000);
+                doc.CompanyName = CutString(model.CompanyName, 250);
+                doc.CompanyAddress = CutString(model.CompanyAddress, 250);
+                doc.CompanyBillingEmail = CutString(model.CompanyBillingEmail, 250);
+                doc.CompanyBillingSystemUrl = CutString(model.CompanyBillingSystemUrl, 250);
+                doc.BillSameAsCapClient = model.BillSameAsCapClient;
+                doc.BillToCompanyName = CutString(model.BillToCompanyName, 150);
+                doc.BillToCompanyAddress = CutString(model.BillToCompanyAddress, 150);
+                doc.BillToCompanyEmail = CutString(model.BillToCompanyEmail, 150);
+                doc.BillToCompanyBillingUrl = CutString(model.BillToCompanyBillingUrl, 250);
+                doc.PocName = CutString(model.PocName, 150);
+                doc.PocEmail = CutString(model.PocEmail, 150);
+                doc.PocPhone = CutString(model.PocPhone, 150);
+                doc.IMO = model.IMO;
+                doc.VesselName = CutString(model.VesselName, 255);
+                doc.ShipType = model.ShipType != default(ShipType) ? (int)model.ShipType : (int?)null;
+                doc.WCN = CutString(model.WCN, 150);
+                doc.ClassSociety = CutString(model.ClassSociety != null ? string.Join(",", model.ClassSociety) : null, 400);
+                doc.AbsClassID = CutString(model.AbsClassID, 150);
+                doc.SisterVessel = model.SisterVessel;
+                doc.SisterVesselImoNumber = CutString(model.SisterVesselImoNumber, 250);
+                doc.SisterVesselName = CutString(model.SisterVesselName, 250);
+                doc.Builder = CutString(model.Builder, 250);
+                doc.HullNumber = CutString(model.HullNumber, 150);
+                doc.MonthBuilt = model.MonthBuilt;
+                doc.YearBuilt = model.YearBuilt;
+                doc.LengthOverall = model.LengthOverall;
+                doc.CRMOpportunityNumber = CutString(model.CRMOpportunityNumber, 20);
+                doc.ProjectStatus = model.ProjectStatus;
+                doc.ProjectPriority = model.ProjectPriority;
+                doc.ModifiedDate = DateTime.UtcNow.Date;
+                doc.LastModifiedBy = CutString(user, 250);
+                doc.PotentialDrydockDate = model.PotentialDrydockDate?.Date;
+                doc.SurveyFirstVisit = model.SurveyFirstVisit?.Date;
+                doc.SurveyLastVisit = model.SurveyLastVisit?.Date;
+                doc.ClientProfileId = model.ClientProfileId;
+                doc.BillToClientProfileId = model.BillToClientProfileId;
+                doc.BillToWCN = CutString(model.BillToWCN, 150);
+                doc.LeadSurveyor = CutString(model.LeadSurveyor, 150);
+                doc.LeadSurveyorEID = CutString(model.LeadSurveyorEID, 150);
+                doc.SecondSurveyor = CutString(model.SecondSurveyor != null ? string.Join(",", model.SecondSurveyor) : null, 150);
+                doc.SecondSurveyorEID = CutString(model.SecondSurveyorEID, 150);
+                doc.ThirdSurveyor = CutString(model.ThirdSurveyor, 150);
+                doc.ThirdSurveyorEID = CutString(model.ThirdSurveyorEID, 150);
+                doc.FourthSurveyor = CutString(model.FourthSurveyor, 150);
+                doc.FourthSurveyorEID = CutString(model.FourthSurveyorEID, 150);
+                doc.AdditionalSurveyors = model.AdditionalSurveyors;
+                doc.ClassSocietyOther = CutString(model.ClassSocietyOther, 400);
+                doc.CapScopeOther = CutString(model.CapScopeOther, 150);
+                doc.VesselType = model.VesselType;
+                doc.CopyingVesselID = model.CopyingVesselID;
+                doc.IsDefaultTank = model.IsDefaultTank;
+                doc.TankVesselType = model.TankVesselType;
+                doc.TankVesselIMO = model.TankVesselIMO;
 
-            await Container.ReplaceItemAsync(doc, idStr, pk);
+                await Container.ReplaceItemAsync(doc, idStr, pk);
+            }
 
             // Nested SPs: Update_Project_Status (recalculate all) and Create_Activity
             await _recalculator.RecalculateAllAsync();
@@ -1108,11 +1161,11 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             try
             {
                 var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, new PartitionKey(idStr));
-                return resp.Resource?.Name ?? string.Empty;
+                return resp.Resource?.Name!;
             }
             catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                return string.Empty;
+                return null!;
             }
         }
 
@@ -1124,16 +1177,22 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             var idStr = id.ToString();
             var pk = new PartitionKey(idStr);
-            var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, pk);
-            if (resp.Resource != null)
+            try
             {
-                var doc = resp.Resource;
-                doc.ProjectStatus = projectStatus;
-                doc.ModifiedDate = DateTime.UtcNow;
-                doc.StatusChangedBy = statusChangedBy;
-                doc.StatusChangedDate = DateTimeOffset.UtcNow;
-                doc.LastModifiedBy = user;
-                await Container.ReplaceItemAsync(doc, idStr, pk);
+                var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, pk);
+                if (resp.Resource != null)
+                {
+                    var doc = resp.Resource;
+                    doc.ProjectStatus = projectStatus;
+                    doc.ModifiedDate = DateTime.UtcNow.Date;
+                    doc.StatusChangedBy = statusChangedBy;
+                    doc.StatusChangedDate = DateTimeOffset.UtcNow;
+                    doc.LastModifiedBy = user;
+                    await Container.ReplaceItemAsync(doc, idStr, pk);
+                }
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
             }
 
             var activityStatus = projectStatus == 13 ? "Project Cancelled" : "Project Closed";
@@ -1196,12 +1255,18 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             // 4. Projects
             var idStr = id.ToString();
             var projectPk = new PartitionKey(idStr);
-            var projResp = await Container.ReadItemAsync<ProjectDocument>(idStr, projectPk);
-            if (projResp.Resource != null)
+            try
             {
-                var doc = projResp.Resource;
-                doc.IsDeleted = true;
-                await Container.ReplaceItemAsync(doc, idStr, projectPk);
+                var projResp = await Container.ReadItemAsync<ProjectDocument>(idStr, projectPk);
+                if (projResp.Resource != null)
+                {
+                    var doc = projResp.Resource;
+                    doc.IsDeleted = true;
+                    await Container.ReplaceItemAsync(doc, idStr, projectPk);
+                }
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
             }
 
             // 5. Vessel_TankMapping
@@ -1264,11 +1329,11 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             try
             {
                 var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, new PartitionKey(idStr));
-                return resp.Resource?.IMO?.ToString() ?? string.Empty;
+                return resp.Resource?.IMO?.ToString()!;
             }
             catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                return string.Empty;
+                return null!;
             }
         }
 
@@ -1316,20 +1381,18 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var tasksById = tasks.ToDictionary(t => t.Id);
 
             // Join pts and tasks
-            var joined = new List<(int TaskId, string Type, DateTime? LastModifiedDate, string Name)>();
+            var joined = new List<(int TaskId, string? Type, DateTime? LastModifiedDate, string? Name)>();
             foreach (var pts in ptsList)
             {
                 if (pts.TaskId.HasValue && tasksById.TryGetValue(pts.TaskId.Value, out var t))
                 {
-                    var typeVal = t.Cap2Type ?? t.Type ?? string.Empty;
-                    var nameVal = t.Cap2Name ?? t.Name ?? string.Empty;
-                    joined.Add((t.Id, typeVal, pts.LastModifiedDate, nameVal));
+                    joined.Add((t.Id, t.Type, pts.LastModifiedDate, t.Name));
                 }
             }
 
             // ROW_NUMBER() OVER (PARTITION BY t.Type ORDER BY pts.LastModifiedDate ASC [NULLs first], then t.Id ASC)
             var result = joined
-                .GroupBy(x => x.Type)
+                .GroupBy(x => x.Type, SqlStringEqualityComparer.Instance)
                 .Select(g => g
                     .OrderBy(x => x.LastModifiedDate.HasValue ? 1 : 0)
                     .ThenBy(x => x.LastModifiedDate)
@@ -1381,7 +1444,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             }
 
             var tasks = new List<TaskDocument>();
-            using (var feed = _tasksContainer.GetItemQueryIterator<TaskDocument>(new QueryDefinition("SELECT c.Id, c.Category FROM c")))
+            using (var feed = _tasksContainer.GetItemQueryIterator<TaskDocument>(new QueryDefinition("SELECT c.ID AS Id, c.ID, c.Category FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
@@ -1395,43 +1458,52 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 .Where(pts => pts.TaskId.HasValue && tasksById.ContainsKey(pts.TaskId.Value))
                 .Select(pts => new
                 {
-                    Category = tasksById[pts.TaskId!.Value].Category ?? string.Empty,
+                    Category = tasksById[pts.TaskId!.Value].Category,
                     pts.StatusId,
                     pts.StatusDate,
                     pts.LastModifiedDate
                 })
                 .ToList();
 
+            bool IsCat(string? c, string target) =>
+                c != null && string.Equals(c.TrimEnd(' '), target, StringComparison.OrdinalIgnoreCase);
+
             // Technical tasks ('Project')
-            var techCompleted = joined.Count(x => string.Equals(x.Category, "Project", StringComparison.OrdinalIgnoreCase) && x.StatusId == 1);
-            var techTotal = joined.Count(x => string.Equals(x.Category, "Project", StringComparison.OrdinalIgnoreCase) && x.StatusId != 4);
-            float? techPct = techTotal == 0 ? null : (float)techCompleted / techTotal;
+            var techCompleted = joined.Count(x => IsCat(x.Category, "Project") && x.StatusId == 1);
+            var techTotal = joined.Count(x => IsCat(x.Category, "Project") && x.StatusId != null && x.StatusId != 4);
+            double? techPct = techTotal == 0 ? null : (double)techCompleted / techTotal;
 
             // Invoice tasks ('Invoicing')
-            var invCompleted = joined.Count(x => string.Equals(x.Category, "Invoicing", StringComparison.OrdinalIgnoreCase) && x.StatusId == 1);
-            var invTotal = joined.Count(x => string.Equals(x.Category, "Invoicing", StringComparison.OrdinalIgnoreCase) && x.StatusId != 4);
-            float? invPct = invTotal == 0 ? null : (float)invCompleted / invTotal;
+            var invCompleted = joined.Count(x => IsCat(x.Category, "Invoicing") && x.StatusId == 1);
+            var invTotal = joined.Count(x => IsCat(x.Category, "Invoicing") && x.StatusId != null && x.StatusId != 4);
+            double? invPct = invTotal == 0 ? null : (double)invCompleted / invTotal;
 
             // Days worked
             var utcNow = DateTime.UtcNow;
             var daysByCategory = joined
-                .GroupBy(x => x.Category)
+                .GroupBy(x => (x.Category ?? string.Empty).TrimEnd(' '), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(
                     g => g.Key,
-                    g => g.Max(pts =>
+                    g =>
                     {
-                        if (pts.StatusId == 3 || pts.StatusId == 4) return 0;
-                        if (pts.StatusId == 1)
+                        var nonNullDays = g.Select(pts =>
                         {
-                            return SqlDate.DiffDays(pts.StatusDate ?? utcNow, pts.LastModifiedDate ?? utcNow);
-                        }
-                        return SqlDate.DiffDays(pts.StatusDate ?? utcNow, utcNow);
-                    }),
+                            if (pts.StatusId == 3 || pts.StatusId == 4) return (int?)0;
+                            if (pts.StatusId == 1)
+                            {
+                                if (pts.StatusDate.HasValue)
+                                    return (int?)SqlDate.DiffDays(pts.StatusDate.Value, pts.LastModifiedDate ?? utcNow);
+                                return null;
+                            }
+                            return (int?)SqlDate.DiffDays(pts.StatusDate ?? utcNow, utcNow);
+                        }).Where(d => d.HasValue).Select(d => d!.Value).ToList();
+                        return nonNullDays.Count > 0 ? nonNullDays.Max() : (int?)null;
+                    },
                     StringComparer.OrdinalIgnoreCase
                 );
 
-            int? invDays = daysByCategory.TryGetValue("Invoicing", out var idays) ? idays : null;
-            int? techDays = daysByCategory.TryGetValue("Project", out var tdays) ? tdays : null;
+            int? invDays = daysByCategory.FirstOrDefault(kv => IsCat(kv.Key, "Invoicing")).Value;
+            int? techDays = daysByCategory.FirstOrDefault(kv => IsCat(kv.Key, "Project")).Value;
 
             int stInt = 0;
             if (p.ShipType != null && int.TryParse(p.ShipType.ToString(), out var parsedSt))
@@ -1440,18 +1512,18 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             return new ProjectSummary
             {
                 ID = p.EffectiveId,
-                Name = p.Name ?? string.Empty,
+                Name = p.Name,
                 IMO = p.IMO,
-                VesselName = p.VesselName ?? string.Empty,
+                VesselName = p.VesselName,
                 ShipType = (ShipType)stInt,
-                CapRegion = p.CapRegion ?? string.Empty,
+                CapRegion = p.CapRegion,
                 YearBuilt = p.YearBuilt,
-                AgreementOwner = p.AgreementOwner ?? string.Empty,
-                AgreementNumber = p.AgreementNumber ?? string.Empty,
+                AgreementOwner = p.AgreementOwner,
+                AgreementNumber = p.AgreementNumber,
                 PIDNumber = p.PIDNumberInt,
-                ProjectComments = p.ProjectComments ?? string.Empty,
-                AreTechnicalTasksComplete = techPct.HasValue && techPct.Value >= 1.0f,
-                AreInvoiceTasksComplete = invPct.HasValue && invPct.Value >= 1.0f,
+                ProjectComments = p.ProjectComments,
+                AreTechnicalTasksComplete = techPct.HasValue && techPct.Value >= 1.0,
+                AreInvoiceTasksComplete = invPct.HasValue && invPct.Value >= 1.0,
                 ProjectPriority = p.ProjectPriority,
                 TechnicalTasksCompletionPercentage = techPct,
                 InvoiceTasksCompletionPercentage = invPct,
@@ -1566,13 +1638,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var projects = await QueryAsync(new QueryDefinition("SELECT * FROM c WHERE c.IsDeleted = false"));
 
             // Statuses
-            var statuses = new Dictionary<int, string>();
+            var statuses = new Dictionary<int, string?>();
             using (var feed = _statusesContainer.GetItemQueryIterator<StatusDocument>(new QueryDefinition("SELECT c.ID, c.Status FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    foreach (var s in resp) statuses[s.ID] = s.Status ?? string.Empty;
+                    foreach (var s in resp) statuses[s.ID] = s.Status;
                 }
             }
 
@@ -1666,20 +1738,19 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     {
                         Id = p.EffectiveId,
                         Name = p.Name ?? string.Empty,
-                        PIDNumber = p.PIDNumber?.ToString() ?? string.Empty,
-                        CompanyName = p.CompanyName ?? string.Empty,
-                        IMO = p.IMO?.ToString() ?? string.Empty,
-                        WCN = p.WCN ?? string.Empty,
+                        PIDNumber = p.PIDNumber?.ToString(),
+                        CompanyName = p.CompanyName,
+                        IMO = p.IMO?.ToString(),
+                        WCN = p.WCN,
                         PotentialDrydockDate = p.PotentialDrydockDate,
-                        CapRegion = p.CapRegion ?? string.Empty,
-                        ProjectPriority = p.ProjectPriority?.ToString() ?? string.Empty,
+                        CapRegion = p.CapRegion,
+                        ProjectPriority = p.ProjectPriority?.ToString(),
                         ProjectStatusName = statusName,
-                        StatusName = statusName,
                         CommentCreatedBy = commentAuthor,
                         MostRecentComment = comm?.Comment,
                         CommentLastModifiedDate = comm?.LastModifiedDate,
                         ProjectLastUpdatedDate = act?.CreateDttm,
-                        PercentComplete = p.PercentComplete ?? 0,
+                        PercentComplete = p.PercentComplete,
                         IsDownload = isDownload
                     });
                 }
@@ -1698,24 +1769,24 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var projects = await QueryAsync(new QueryDefinition("SELECT * FROM c WHERE c.IsDeleted = false"));
 
             // Statuses
-            var statuses = new Dictionary<int, string>();
+            var statuses = new Dictionary<int, string?>();
             using (var feed = _statusesContainer.GetItemQueryIterator<StatusDocument>(new QueryDefinition("SELECT c.ID, c.Status FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    foreach (var s in resp) statuses[s.ID] = s.Status ?? string.Empty;
+                    foreach (var s in resp) statuses[s.ID] = s.Status;
                 }
             }
 
             // Ports
-            var ports = new Dictionary<int, string>();
+            var ports = new Dictionary<int, string?>();
             using (var feed = _portOfCallContainer.GetItemQueryIterator<PortOfCallDocument>(new QueryDefinition("SELECT c.PortId, c.PortName FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    foreach (var poc in resp) ports[poc.PortId] = poc.PortName ?? string.Empty;
+                    foreach (var poc in resp) ports[poc.PortId] = poc.PortName;
                 }
             }
 
@@ -1788,7 +1859,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                         DrydockStart = p.DrydockStart,
                         DrydockEnd = p.DrydockEnd,
                         SpecialHull = p.SpecialHull ?? true,
-                        Fatigue = p.FatigueAnalysis ?? true,
+                        Fatigue = true,
                         ExpenseMarkup = p.ExpenseMarkup,
                         SurveyDayrateClient = p.SurveyDayRateClient,
                         SurveyDayrateAbs = p.SurveyDayRateAbs,
@@ -1883,11 +1954,11 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             try
             {
                 var resp = await Container.ReadItemAsync<ProjectDocument>(idStr, new PartitionKey(idStr));
-                return resp.Resource?.VesselType ?? string.Empty;
+                return resp.Resource?.VesselType!;
             }
             catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                return string.Empty;
+                return null!;
             }
         }
 
@@ -1901,13 +1972,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             var projects = await QueryAsync(query);
 
-            var statuses = new Dictionary<int, string>();
+            var statuses = new Dictionary<int, string?>();
             using (var feed = _statusesContainer.GetItemQueryIterator<StatusDocument>(new QueryDefinition("SELECT c.ID, c.Status FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    foreach (var s in resp) statuses[s.ID] = s.Status ?? string.Empty;
+                    foreach (var s in resp) statuses[s.ID] = s.Status;
                 }
             }
 
@@ -1921,10 +1992,10 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 {
                     ID = p.EffectiveId,
                     Name = p.Name ?? string.Empty,
-                    PIDNumber = p.PIDNumber?.ToString() ?? string.Empty,
+                    PIDNumber = p.PIDNumber?.ToString(),
                     SurveyFirstVisit = p.SurveyFirstVisit,
                     SurveyLastVisit = p.SurveyLastVisit,
-                    StatusName = statusName ?? string.Empty
+                    StatusName = statusName
                 };
             }).ToList();
         }
@@ -1954,11 +2025,11 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var result = new List<ClientProfileDTO>();
             foreach (var c in clients)
             {
-                var cidStr = c.id;
+                var cidStr = c.Id.ToString();
                 int count = countsByClient.TryGetValue(cidStr, out var cnt) ? cnt : 0;
                 result.Add(new ClientProfileDTO
                 {
-                    ClientId = Guid.TryParse(cidStr, out var parsedGuid) ? parsedGuid : Guid.Empty,
+                    ClientId = c.Id,
                     ProjectCount = (uint)count
                 });
             }
@@ -1973,23 +2044,23 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             var projects = await QueryAsync(new QueryDefinition("SELECT * FROM c"));
 
-            var statuses = new Dictionary<int, string>();
+            var statuses = new Dictionary<int, string?>();
             using (var feed = _statusesContainer.GetItemQueryIterator<StatusDocument>(new QueryDefinition("SELECT c.ID, c.Status FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    foreach (var s in resp) statuses[s.ID] = s.Status ?? string.Empty;
+                    foreach (var s in resp) statuses[s.ID] = s.Status;
                 }
             }
 
-            var ports = new Dictionary<int, string>();
+            var ports = new Dictionary<int, string?>();
             using (var feed = _portOfCallContainer.GetItemQueryIterator<PortOfCallDocument>(new QueryDefinition("SELECT c.PortId, c.PortName FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    foreach (var poc in resp) ports[poc.PortId] = poc.PortName ?? string.Empty;
+                    foreach (var poc in resp) ports[poc.PortId] = poc.PortName;
                 }
             }
 
@@ -2062,7 +2133,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                             ProjectStatus = p.ProjectStatus,
                             ProjectPriority = p.ProjectPriority,
                             SpecialHull = p.SpecialHull ?? true,
-                            Fatigue = p.FatigueAnalysis ?? true,
+                            Fatigue = true,
                             ExpenseMarkup = p.ExpenseMarkup,
                             SurveyDayrateClient = p.SurveyDayRateClient,
                             SurveyDayrateAbs = p.SurveyDayRateAbs,
@@ -2145,13 +2216,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             var projects = await QueryAsync(new QueryDefinition("SELECT * FROM c WHERE c.IsDeleted = false"));
 
-            var statuses = new Dictionary<int, string>();
+            var statuses = new Dictionary<int, string?>();
             using (var feed = _statusesContainer.GetItemQueryIterator<StatusDocument>(new QueryDefinition("SELECT c.ID, c.Status FROM c")))
             {
                 while (feed.HasMoreResults)
                 {
                     var resp = await feed.ReadNextAsync();
-                    foreach (var s in resp) statuses[s.ID] = s.Status ?? string.Empty;
+                    foreach (var s in resp) statuses[s.ID] = s.Status;
                 }
             }
 
@@ -2161,7 +2232,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 .ToList();
 
             // Offline projects (IsSynched=0 and IsReadOnly=0)
-            var offlineProjectIds = new HashSet<int>();
+            var offlineProjectIds = new List<int>();
             using (var feed = _isSynchedContainer.GetItemQueryIterator<IsSynchedOnlineDocument>(new QueryDefinition("SELECT c.ProjectId FROM c WHERE c.IsSynched = false AND c.IsReadOnly = false")))
             {
                 while (feed.HasMoreResults)
@@ -2175,22 +2246,44 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 }
             }
 
-            int total = activeProjects.Count;
-            int offline = activeProjects.Count(p => offlineProjectIds.Contains(p.EffectiveId));
-            int online = total - offline;
+            int total = 0;
+            int online = 0;
+            int offline = 0;
+            foreach (var p in activeProjects)
+            {
+                int matchCount = offlineProjectIds.Count(id => id == p.EffectiveId);
+                if (matchCount == 0)
+                {
+                    total += 1;
+                    online += 1;
+                }
+                else
+                {
+                    total += matchCount;
+                    offline += matchCount;
+                }
+            }
 
             // Group by region: ISNULL(p.CapRegion, 'Unknown')
-            var regions = activeProjects
-                .GroupBy(p => p.CapRegion, SqlStringEqualityComparer.Instance)
-                .ToDictionary(
-                    g => g.Key == null ? "Unknown" : g.Key,
-                    g => g.Count(),
-                    SqlStringEqualityComparer.Instance);
+            // SQL keeps the last row on duplicate key; result dictionaries use the default (case-sensitive) comparer
+            var regions = new Dictionary<string, int>();
+            var regionGroups = activeProjects
+                .GroupBy(p => p.CapRegion, SqlStringEqualityComparer.Instance);
+            foreach (var g in regionGroups)
+            {
+                string key = g.Key == null ? "Unknown" : g.Key;
+                regions[key] = g.Count();
+            }
 
             // Group by status: ISNULL(s.Status, 'Unknown')
-            var statusCounts = activeProjects
-                .GroupBy(p => statuses[p.ProjectStatus!.Value], SqlStringEqualityComparer.Instance)
-                .ToDictionary(g => g.Key, g => g.Count(), SqlStringEqualityComparer.Instance);
+            var statusCounts = new Dictionary<string, int>();
+            var statusGroups = activeProjects
+                .GroupBy(p => (p.ProjectStatus.HasValue && statuses.TryGetValue(p.ProjectStatus.Value, out var sn)) ? sn : null, SqlStringEqualityComparer.Instance);
+            foreach (var g in statusGroups)
+            {
+                string key = g.Key == null ? "Unknown" : g.Key;
+                statusCounts[key] = g.Count();
+            }
 
             return new ProjectStats
             {

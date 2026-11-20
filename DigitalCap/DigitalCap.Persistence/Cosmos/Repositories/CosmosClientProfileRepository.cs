@@ -71,8 +71,29 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             };
         }
 
+        private static void ValidateClient(Client client, bool isInsert)
+        {
+            var op = isInsert ? "INSERT" : "UPDATE";
+            if (client.CompanyName == null)
+            {
+                throw new InvalidOperationException($"Cannot insert the value NULL into column 'CompanyName', table 'CAP.Clients'; column does not allow nulls. {op} fails.");
+            }
+            if (client.CompanyAddress == null)
+            {
+                throw new InvalidOperationException($"Cannot insert the value NULL into column 'CompanyAddress', table 'CAP.Clients'; column does not allow nulls. {op} fails.");
+            }
+            if (client.CompanyName.Length > 150 || client.CompanyAddress.Length > 1000 ||
+                (client.Wcn != null && client.Wcn.Length > 8) ||
+                (client.CompanyBillingEmail != null && client.CompanyBillingEmail.Length > 50) ||
+                (client.CompanyBillingSystemUrl != null && client.CompanyBillingSystemUrl.Length > 150))
+            {
+                throw new InvalidOperationException("String or binary data would be truncated.\r\nThe statement has been terminated.");
+            }
+        }
+
         public async Task AddAsync(Client client)
         {
+            ValidateClient(client, isInsert: true);
             var id = client.Id.ToString("D").ToLowerInvariant();
             var doc = new ClientsDocument
             {
@@ -92,6 +113,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             if (client.Id == Guid.Empty)
             {
+                ValidateClient(client, isInsert: true);
                 var newId = Guid.NewGuid();
                 client.Id = newId;
                 var id = newId.ToString("D").ToLowerInvariant();
@@ -112,6 +134,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             else
             {
                 var id = client.Id.ToString("D").ToLowerInvariant();
+                var existing = await ReadAsync(id, new PartitionKey(id));
+                if (existing == null)
+                {
+                    throw new Exception("Update failed. No rows affected.");
+                }
+
+                ValidateClient(client, isInsert: false);
+
                 var patchOperations = new List<PatchOperation>
                 {
                     PatchOperation.Set("/CompanyName", client.CompanyName),
@@ -270,13 +300,12 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 foreach (var roleName in roleNames)
                 {
-                    resultList.Add(new ClientAdminDto
-                    {
-                        FirstName = account.FirstName!,
-                        LastName = account.LastName!,
-                        Email = user.Email!,
-                        UserRole = roleName!
-                    });
+                    var dto = new ClientAdminDto();
+                    if (account.FirstName != null) dto.FirstName = account.FirstName;
+                    if (account.LastName != null) dto.LastName = account.LastName;
+                    if (user.Email != null) dto.Email = user.Email;
+                    if (roleName != null) dto.UserRole = roleName;
+                    resultList.Add(dto);
                 }
             }
 
@@ -286,7 +315,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 if (x == null && y == null) return 0;
                 if (x == null) return -1;
                 if (y == null) return 1;
-                return stringComparer.Compare(x, y);
+                return stringComparer.Compare(x.TrimEnd(' '), y.TrimEnd(' '));
             });
 
             return resultList

@@ -71,27 +71,30 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var tasksDict = await LoadTasksDictionaryAsync();
             var statusesDict = await LoadStatusesDictionaryAsync();
 
-            // Comments count per task (IsDeleted = false only; null excluded)
-            var commentsQuery = new QueryDefinition("SELECT c.ProjectTaskId FROM c WHERE c.ProjectId = @projectId AND c.IsDeleted = false AND IS_DEFINED(c.ProjectTaskId) = true")
-                .WithParameter("@projectId", projectId);
+            // Comments count per task (cross-partition query for ProjectTaskId)
+            var ptsIds = ptsList.Select(x => x.ID).ToList();
             var commentsCountByTask = new Dictionary<int, int>();
-            using (var feed = _commentsContainer.GetItemQueryIterator<CommentDocument>(commentsQuery, requestOptions: new QueryRequestOptions { PartitionKey = pk }))
+            if (ptsIds.Count > 0)
             {
+                var commentsQuery = new QueryDefinition("SELECT c.ProjectTaskId, COUNT(1) AS cnt FROM c WHERE ARRAY_CONTAINS(@ptsIds, c.ProjectTaskId) AND c.IsDeleted = false GROUP BY c.ProjectTaskId")
+                    .WithParameter("@ptsIds", ptsIds);
+                using var feed = _commentsContainer.GetItemQueryIterator<Newtonsoft.Json.Linq.JObject>(commentsQuery);
                 while (feed.HasMoreResults)
                 {
                     var response = await feed.ReadNextAsync();
-                    foreach (var c in response)
+                    foreach (var row in response)
                     {
-                        if (c.ProjectTaskId.HasValue)
+                        var ptId = row["ProjectTaskId"]?.Value<int>();
+                        var cnt = row["cnt"]?.Value<int>() ?? 0;
+                        if (ptId.HasValue)
                         {
-                            commentsCountByTask[c.ProjectTaskId.Value] = commentsCountByTask.GetValueOrDefault(c.ProjectTaskId.Value) + 1;
+                            commentsCountByTask[ptId.Value] = cnt;
                         }
                     }
                 }
             }
 
             // Files count per task (cross-partition query for TaskId)
-            var ptsIds = ptsList.Select(x => x.ID).ToList();
             var filesCountByTask = new Dictionary<int, int>();
             if (ptsIds.Count > 0)
             {
@@ -224,13 +227,19 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var pts = items[0];
             var utcNow = DateTime.UtcNow;
 
-            var pk = pts.ProjectId.HasValue ? new PartitionKey((double)pts.ProjectId.Value) : PartitionKey.Null;
-            var siblingsQuery = pts.ProjectId.HasValue
-                ? new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = @projectId").WithParameter("@projectId", pts.ProjectId.Value)
-                : new QueryDefinition("SELECT * FROM c WHERE IS_NULL(c.ProjectId)");
-            var siblings = await QueryAsync(siblingsQuery, pk);
+            List<ProjectTaskStatusDocument> siblings;
+            ProjectDocument? project = null;
+            if (pts.ProjectId.HasValue)
+            {
+                var pk = new PartitionKey((double)pts.ProjectId.Value);
+                siblings = await QueryAsync(new QueryDefinition("SELECT * FROM c WHERE c.ProjectId = @projectId").WithParameter("@projectId", pts.ProjectId.Value), pk);
+                project = await ReadProjectAsync(pts.ProjectId.Value);
+            }
+            else
+            {
+                siblings = new List<ProjectTaskStatusDocument>();
+            }
 
-            var project = pts.ProjectId.HasValue ? await ReadProjectAsync(pts.ProjectId.Value) : null;
             var tasksDict = await LoadTasksDictionaryAsync();
             var statusesDict = await LoadStatusesDictionaryAsync();
 
@@ -331,6 +340,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             string? oldAssigned = null;
             bool updated = false;
 
+            var cutAssignedTo = task.AssignedTo != null && task.AssignedTo.Length > 100 ? task.AssignedTo[..100] : task.AssignedTo;
+
             // 1. Read and update the PTS item with id = task.ID in partition task.ProjectId (if both specified)
             if (task.ID.HasValue && task.ProjectId.HasValue)
             {
@@ -347,8 +358,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                         var cutNotes = task.Notes != null && task.Notes.Length > 4000 ? task.Notes[..4000] : task.Notes;
                         var lastModBy = currentUser == null ? "SYSTEM" : (currentUser.Length > 100 ? currentUser[..100] : currentUser);
-                        var cutAssignedTo = task.AssignedTo != null && task.AssignedTo.Length > 100 ? task.AssignedTo[..100] : task.AssignedTo;
-                        var roundValue = task.Value.HasValue ? Math.Round(task.Value.Value, 4) : (decimal?)null;
+                        var roundValue = task.Value.HasValue ? Math.Round(task.Value.Value, 4, MidpointRounding.AwayFromZero) : (decimal?)null;
 
                         doc["StatusId"] = task.StatusId.HasValue ? (JToken)task.StatusId.Value : JValue.CreateNull();
                         doc["Notes"] = cutNotes != null ? (JToken)cutNotes : JValue.CreateNull();
@@ -382,9 +392,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var findPtsQuery = new QueryDefinition("SELECT TOP 1 c.TaskId FROM c WHERE c.id = @id")
                     .WithParameter("@id", idStr);
                 var matchingPts = await QueryAsync(findPtsQuery);
-                if (matchingPts.Count > 0)
+                if (matchingPts.Count > 0 && matchingPts[0].TaskId.HasValue)
                 {
-                    var taskIdStr = matchingPts[0].TaskId.ToString();
+                    var taskIdStr = matchingPts[0].TaskId.Value.ToString();
                     try
                     {
                         var taskResponse = await _tasksContainer.ReadItemAsync<TaskDocument>(taskIdStr, new PartitionKey(taskIdStr));
@@ -403,11 +413,11 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             await _activityWriter.CreateActivityAsync(task.ProjectId, actText, currentUser);
 
             // 5. If assignedTo changed (ignore case and trailing spaces only) -> assignment activity
-            var oldTrim = (oldAssigned ?? string.Empty).TrimEnd();
-            var newTrim = (task.AssignedTo ?? string.Empty).TrimEnd();
+            var oldTrim = (oldAssigned ?? string.Empty).TrimEnd(' ');
+            var newTrim = (cutAssignedTo ?? string.Empty).TrimEnd(' ');
             if (!string.Equals(oldTrim, newTrim, StringComparison.OrdinalIgnoreCase))
             {
-                var assignText = string.Concat("Task ", taskName ?? string.Empty, " assigned to ", task.AssignedTo ?? string.Empty);
+                var assignText = string.Concat("Task ", taskName ?? string.Empty, " assigned to ", cutAssignedTo ?? string.Empty);
                 if (assignText.Length > 500) assignText = assignText[..500];
                 await _activityWriter.CreateActivityAsync(task.ProjectId, assignText, currentUser);
             }

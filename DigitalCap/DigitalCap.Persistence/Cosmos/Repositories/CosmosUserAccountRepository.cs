@@ -88,10 +88,16 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// </summary>
         public async Task<IEnumerable<UserAccountModel>> GetUsersInRoleAsync(string roleName)
         {
-            // 1. Roles matching roleName
+            if (roleName == null)
+            {
+                return Enumerable.Empty<UserAccountModel>();
+            }
+
+            // 1. Roles matching roleName (S2)
+            var trimmedRole = roleName.TrimEnd(' ');
             var rolesContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetRoles);
-            var roleQuery = new QueryDefinition("SELECT c.id FROM c WHERE STRINGEQUALS(c.Name, @roleName, true)")
-                .WithParameter("@roleName", roleName);
+            var roleQuery = new QueryDefinition("SELECT c.id, c.Name FROM c WHERE STRINGEQUALS(RTRIM(c.Name), @roleName, true)")
+                .WithParameter("@roleName", trimmedRole);
 
             var roleIds = new List<string>();
             using (var feed = rolesContainer.GetItemQueryIterator<AspNetRoleDocument>(roleQuery))
@@ -99,7 +105,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 while (feed.HasMoreResults)
                 {
                     var response = await feed.ReadNextAsync();
-                    roleIds.AddRange(response.Select(r => r.id));
+                    roleIds.AddRange(response
+                        .Where(r => r.Name != null && string.Equals(r.Name.TrimEnd(' '), trimmedRole, StringComparison.OrdinalIgnoreCase))
+                        .Select(r => r.id));
                 }
             }
 
@@ -158,9 +166,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                             LastName = a.LastName!,
                             Company = a.Company!,
                             IsAgreeToPrivacy = a.IsAgreeToPrivacy ?? false,
-                            CreatedAt = a.CreatedAt ?? default,
+                            CreatedAt = a.CreatedAt,
                             CreatedBy = a.CreatedBy!,
-                            UpdatedAt = a.UpdatedAt ?? default,
+                            UpdatedAt = a.UpdatedAt,
                             UpdatedBy = a.UpdatedBy!,
                             Deleted = a.Deleted ?? false
                         });
@@ -176,10 +184,16 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// </summary>
         public async Task<IEnumerable<UserAccountModel>> GetUsersInRoleForClientAsync(string roleName, Guid clientId)
         {
-            // 1. Roles matching roleName
+            if (roleName == null)
+            {
+                return Enumerable.Empty<UserAccountModel>();
+            }
+
+            // 1. Roles matching roleName (S2)
+            var trimmedRole = roleName.TrimEnd(' ');
             var rolesContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetRoles);
-            var roleQuery = new QueryDefinition("SELECT c.id FROM c WHERE STRINGEQUALS(c.Name, @roleName, true)")
-                .WithParameter("@roleName", roleName);
+            var roleQuery = new QueryDefinition("SELECT c.id, c.Name FROM c WHERE STRINGEQUALS(RTRIM(c.Name), @roleName, true)")
+                .WithParameter("@roleName", trimmedRole);
 
             var roleIds = new List<string>();
             using (var feed = rolesContainer.GetItemQueryIterator<AspNetRoleDocument>(roleQuery))
@@ -187,7 +201,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 while (feed.HasMoreResults)
                 {
                     var response = await feed.ReadNextAsync();
-                    roleIds.AddRange(response.Select(r => r.id));
+                    roleIds.AddRange(response
+                        .Where(r => r.Name != null && string.Equals(r.Name.TrimEnd(' '), trimmedRole, StringComparison.OrdinalIgnoreCase))
+                        .Select(r => r.id));
                 }
             }
 
@@ -238,7 +254,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 {
                     foreach (var a in matchedAccounts)
                     {
-                        result.Add(new UserAccountModel
+                        var m = new UserAccountModel
                         {
                             Id = a.Id,
                             AspNetUserId = a.AspNetUserId!,
@@ -247,14 +263,15 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                             LastName = a.LastName!,
                             Company = a.Company!,
                             IsAgreeToPrivacy = a.IsAgreeToPrivacy ?? false,
-                            CreatedAt = a.CreatedAt ?? default,
+                            CreatedAt = a.CreatedAt,
                             CreatedBy = a.CreatedBy!,
-                            UpdatedAt = a.UpdatedAt ?? default,
+                            UpdatedAt = a.UpdatedAt,
                             UpdatedBy = a.UpdatedBy!,
                             Deleted = a.Deleted ?? false,
-                            Phone = a.Phone!,
-                            TimeZone = a.TimeZone ?? ""
-                        });
+                            Phone = a.Phone!
+                        };
+                        if (a.TimeZone != null) m.TimeZone = a.TimeZone;
+                        result.Add(m);
                     }
                 }
             }
@@ -276,9 +293,12 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         public async Task<IEnumerable<CapUser>> GetAbsUsersAsync()
         {
             var accQuery = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.Company), 'ABS', true) AND c.Deleted = false");
-            var accounts = await QueryAsync(accQuery);
+            var accountsRaw = await QueryAsync(accQuery);
+            var accounts = accountsRaw
+                .Where(c => c.Company != null && string.Equals(c.Company.TrimEnd(' '), "ABS", StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
-            return await BuildCapUsersAsync(accounts, customCompanyName: null);
+            return await BuildCapUsersAsync(accounts, customCompanyName: null, isClientUsers: false);
         }
 
         /// <summary>
@@ -287,7 +307,10 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         public async Task<IEnumerable<UserAccountModel>> GetAbsUsers()
         {
             var accQuery = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.Company), 'ABS', true) AND c.Deleted = false");
-            var accounts = await QueryAsync(accQuery);
+            var accountsRaw = await QueryAsync(accQuery);
+            var accounts = accountsRaw
+                .Where(c => c.Company != null && string.Equals(c.Company.TrimEnd(' '), "ABS", StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
             if (accounts.Count == 0)
             {
@@ -346,17 +369,18 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 foreach (var _ in userRoleIds)
                 {
-                    result.Add(new UserAccountModel
+                    var m = new UserAccountModel
                     {
                         Id = a.Id,
                         AspNetUserId = a.AspNetUserId!,
                         FirstName = a.FirstName!,
                         LastName = a.LastName!,
-                        Email = email!,
                         Phone = a.Phone!,
-                        TimeZone = a.TimeZone!,
                         Company = a.Company!
-                    });
+                    };
+                    if (email != null) m.Email = email;
+                    if (a.TimeZone != null) m.TimeZone = a.TimeZone;
+                    result.Add(m);
                 }
             }
 
@@ -368,7 +392,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// </summary>
         public async Task<IEnumerable<CapUser>> GetClientUsersAsync(string clientId)
         {
-            var clientGuid = Guid.Parse(clientId);
+            if (clientId == null)
+            {
+                return Enumerable.Empty<CapUser>();
+            }
+            if (!Guid.TryParse(clientId, out var clientGuid))
+            {
+                throw new InvalidOperationException("Conversion failed when converting from a character string to uniqueidentifier.");
+            }
             var clientPk = clientGuid.ToString("D").ToLowerInvariant();
 
             var accQuery = new QueryDefinition("SELECT * FROM c WHERE c.Deleted = false");
@@ -387,7 +418,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 companyName = null;
             }
 
-            return await BuildCapUsersAsync(accounts, companyName);
+            return await BuildCapUsersAsync(accounts, companyName, isClientUsers: true);
         }
 
         /// <summary>
@@ -486,6 +517,24 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             {
                 entity.Id = Guid.NewGuid();
             }
+
+            var idString = entity.Id.ToString("D").ToLowerInvariant();
+            var checkQuery = new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.id = @id")
+                .WithParameter("@id", idString);
+            var existingCount = 0;
+            using (var feed = Container.GetItemQueryIterator<int>(checkQuery))
+            {
+                while (feed.HasMoreResults)
+                {
+                    var resp = await feed.ReadNextAsync();
+                    existingCount += resp.Sum();
+                }
+            }
+            if (existingCount > 0)
+            {
+                throw new InvalidOperationException($"Violation of PRIMARY KEY constraint. Cannot insert duplicate key in object 'dbo.UserAccounts'. The duplicate key value is ({entity.Id}).");
+            }
+
             if (!entity.CreatedAt.HasValue || entity.CreatedAt.Value == DateTime.MinValue)
             {
                 entity.CreatedAt = DateTime.UtcNow;
@@ -493,7 +542,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             var doc = new UserAccountDocument
             {
-                id = entity.Id.ToString("D").ToLowerInvariant(),
+                id = idString,
                 Id = entity.Id,
                 AspNetUserId = entity.AspNetUserId,
                 ClientId = entity.ClientId,
@@ -647,7 +696,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         #region Helpers
         private static UserAccountModel MapToUserAccountModel(UserAccountDocument doc)
         {
-            return new UserAccountModel
+            var m = new UserAccountModel
             {
                 Id = doc.Id,
                 AspNetUserId = doc.AspNetUserId!,
@@ -656,14 +705,15 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 LastName = doc.LastName!,
                 Company = doc.Company!,
                 IsAgreeToPrivacy = doc.IsAgreeToPrivacy ?? false,
-                CreatedAt = doc.CreatedAt ?? default,
+                CreatedAt = doc.CreatedAt,
                 CreatedBy = doc.CreatedBy!,
-                UpdatedAt = doc.UpdatedAt ?? default,
+                UpdatedAt = doc.UpdatedAt,
                 UpdatedBy = doc.UpdatedBy!,
                 Deleted = doc.Deleted ?? false,
-                Phone = doc.Phone!,
-                TimeZone = doc.TimeZone ?? ""
+                Phone = doc.Phone!
             };
+            if (doc.TimeZone != null) m.TimeZone = doc.TimeZone;
+            return m;
         }
 
         private async Task<List<AspNetUserRoleDocument>> GetUserRolesForUsersAsync(List<string> userIds)
@@ -713,7 +763,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             return dict;
         }
 
-        private async Task<IEnumerable<CapUser>> BuildCapUsersAsync(List<UserAccountDocument> accounts, string? customCompanyName)
+        private async Task<IEnumerable<CapUser>> BuildCapUsersAsync(List<UserAccountDocument> accounts, string? customCompanyName, bool isClientUsers = false)
         {
             if (accounts.Count == 0)
             {
@@ -771,18 +821,19 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 foreach (var roleName in roleNames)
                 {
-                    result.Add(new CapUser
+                    var cu = new CapUser
                     {
                         Id = a.Id,
                         AspNetUserId = a.AspNetUserId!,
                         FirstName = a.FirstName!,
                         LastName = a.LastName!,
                         Email = email!,
-                        Phone = a.Phone,
-                        TimeZone = a.TimeZone!,
-                        Company = customCompanyName ?? a.Company!,
+                        Company = isClientUsers ? customCompanyName! : a.Company!,
                         UserRole = roleName!
-                    });
+                    };
+                    if (a.Phone != null) cu.Phone = a.Phone;
+                    if (a.TimeZone != null) cu.TimeZone = a.TimeZone;
+                    result.Add(cu);
                 }
             }
 

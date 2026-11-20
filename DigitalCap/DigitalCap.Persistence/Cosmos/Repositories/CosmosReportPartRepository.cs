@@ -1173,7 +1173,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         // Helper 12: Sp_Get_SectionNamesByPartName
         internal async Task<PartSectionNamesList> Sp_Get_SectionNamesByPartName(int vesselTypeId, string partName)
         {
-            var pName50 = string.IsNullOrEmpty(partName) ? "" : (partName.Length > 50 ? partName.Substring(0, 50) : partName);
+            var pName50 = partName == null ? null : (partName.Length > 50 ? partName.Substring(0, 50) : partName);
 
             var vtpContainer = ContainerFactory.GetContainer(CosmosContainers.Config_VesselTypePartMapping);
             var vtpQ = new QueryDefinition(
@@ -1209,7 +1209,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             bool normalExists = (from vtns in vnsList
                                  join vtp in vtpList on vtns.VesselTypePartMappingId equals vtp.VesselTypePartMappingId
-                                 where vtp.VesselTypeId == vesselTypeId && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                 where vtp.VesselTypeId == vesselTypeId && pName50 != null && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
                                  select 1).Any();
 
             if (normalExists)
@@ -1217,6 +1217,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var normalMatches = (from vtns in vnsList
                                      join vtp in vtpList on vtns.VesselTypePartMappingId equals vtp.VesselTypePartMappingId
                                      where vtp.VesselTypeId == vesselTypeId
+                                        && pName50 != null
                                         && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
                                         && vtp.IsDeleted == false
                                         && vtns.IsDeleted == false
@@ -1252,7 +1253,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     }
                 }
 
-                var matchedTemplates = rtDocs.Where(t => string.Equals(t.SectionName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)).ToList();
+                var matchedTemplates = rtDocs.Where(t => pName50 != null && string.Equals(t.SectionName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)).ToList();
                 if (matchedTemplates.Count > 0)
                 {
                     var matchedTemplateIds = matchedTemplates.Select(t => t.Id).ToList();
@@ -1349,7 +1350,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             bool tankExists = (from vsts in vtsList
                                join vtp in vtpList on vsts.VesselTypePartMappingId equals vtp.VesselTypePartMappingId
-                               where vsts.VesselTypeId == vesselTypeId && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                               where vsts.VesselTypeId == vesselTypeId && pName50 != null && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
                                select 1).Any();
 
             if (tankExists)
@@ -1357,7 +1358,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var mappedTanks = (from vsts in vtsList
                                    join vtp in vtpList on vsts.VesselTypePartMappingId equals vtp.VesselTypePartMappingId
                                    join tt in ttList on vsts.TankTypeId equals tt.Id
-                                   where vsts.VesselTypeId == vesselTypeId && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                   where vsts.VesselTypeId == vesselTypeId && pName50 != null && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
                                    select new TankSectionNames
                                    {
                                        PartId = vtp.VesselTypePartMappingId,
@@ -1377,7 +1378,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var excludedTankTypeIds = (from vsts in vtsList
                                            join vtp in vtpList on vsts.VesselTypePartMappingId equals vtp.VesselTypePartMappingId
                                            join tt in ttList on vsts.TankTypeId equals tt.Id
-                                           where vsts.VesselTypeId == vesselTypeId && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                           where vsts.VesselTypeId == vesselTypeId && pName50 != null && string.Equals(vtp.PartName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
                                            select vsts.TankTypeId).ToHashSet();
 
                 var unmappedTanks = (from tt in ttList
@@ -1395,7 +1396,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                                          PlaceholderCount = tt.CurrentconditionPlaceholders,
                                          FileNameCount = 0,
                                          IsActive = true,
-                                         IsMapped = string.Equals(tmpl?.SectionName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                         IsMapped = pName50 != null && string.Equals(tmpl?.SectionName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
                                      }).ToList();
 
                 tankResult.AddRange(unmappedTanks);
@@ -1416,7 +1417,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                                          PlaceholderCount = tt.CurrentconditionPlaceholders,
                                          FileNameCount = 0,
                                          IsActive = true,
-                                         IsMapped = string.Equals(tmpl?.SectionName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
+                                         IsMapped = pName50 != null && string.Equals(tmpl?.SectionName?.TrimEnd(' '), pName50.TrimEnd(' '), StringComparison.OrdinalIgnoreCase)
                                      }).ToList();
 
                 tankResult.AddRange(unmappedTanks);
@@ -3148,7 +3149,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var vtmContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
                 // R9d: Query without case-sensitive VesselType filter, then compare in memory with OrdinalIgnoreCase + TrimEnd(' ')
                 var vtmQ = new QueryDefinition(
-                    "SELECT * FROM c WHERE c.IsActive = true AND c.IsDeleted = false AND IS_NULL(c.ImoNumber)");
+                    "SELECT * FROM c WHERE c.IsActive = true AND c.IsDeleted = false AND (NOT IS_DEFINED(c.ImoNumber) OR IS_NULL(c.ImoNumber))");
 
                 using (var feed = vtmContainer.GetItemQueryIterator<VesselTankMappingDocument>(vtmQ))
                 {

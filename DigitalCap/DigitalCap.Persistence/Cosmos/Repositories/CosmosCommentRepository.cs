@@ -55,8 +55,16 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task<IEnumerable<CommentModel>> CreateCommentAsync(int projectId, int? projectTaskId, string userId, string comment)
         {
-            var cutComment = comment != null && comment.Length > 4000 ? comment[..4000] : comment;
-            var cutCreatedBy = userId != null && userId.Length > 450 ? userId[..450] : userId;
+            if (comment == null || userId == null)
+            {
+                var userName = await ResolveUserNameAsync(userId);
+                await _activityWriter.CreateActivityAsync(projectId, null, userName);
+                var nullCol = comment == null ? "Comment" : "CreatedBy";
+                throw new InvalidOperationException($"Cannot insert the value NULL into column '{nullCol}', table 'CAP.Comments'; column does not allow nulls. INSERT fails.");
+            }
+
+            var cutComment = comment.Length > 4000 ? comment[..4000] : comment;
+            var cutCreatedBy = userId.Length > 450 ? userId[..450] : userId;
 
             var newId = await _sequenceService.GetNextAsync(CosmosContainers.CAP_Comments);
 
@@ -75,8 +83,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var pk = new PartitionKey((double)projectId);
             await CreateAsync(doc, pk);
 
-            var userName = await ResolveUserNameAsync(userId);
-            await _activityWriter.CreateActivityAsync(projectId, cutComment, userName);
+            var resolvedUserName = await ResolveUserNameAsync(userId);
+            await _activityWriter.CreateActivityAsync(projectId, cutComment, resolvedUserName);
 
             if (projectTaskId.HasValue)
             {
@@ -88,23 +96,30 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task<IEnumerable<CommentModel>> UpdateCommentAsync(int commentId, int projectId, int? projectTaskId, string comment, string user)
         {
-            var cutComment = comment != null && comment.Length > 4000 ? comment[..4000] : comment;
-
             var findQuery = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
                 .WithParameter("@id", commentId.ToString());
             var items = await QueryAsync(findQuery);
 
             if (items.Count > 0)
             {
+                if (comment == null)
+                {
+                    var userName = await ResolveUserNameAsync(user);
+                    await _activityWriter.CreateActivityAsync(projectId, null, userName);
+                    throw new InvalidOperationException("Cannot insert the value NULL into column 'Comment', table 'CAP.Comments'; column does not allow nulls. UPDATE fails.");
+                }
+
                 var doc = items[0];
                 var pk = new PartitionKey((double)doc.ProjectId);
+                var cutComment = comment.Length > 4000 ? comment[..4000] : comment;
                 doc.Comment = cutComment;
                 doc.LastModifiedDate = DateTimeOffset.UtcNow;
                 await ReplaceAsync(doc, doc.id, pk);
             }
 
-            var userName = await ResolveUserNameAsync(user);
-            await _activityWriter.CreateActivityAsync(projectId, cutComment, userName);
+            var effectiveComment = comment != null && comment.Length > 4000 ? comment[..4000] : comment;
+            var resolvedUser = await ResolveUserNameAsync(user);
+            await _activityWriter.CreateActivityAsync(projectId, effectiveComment, resolvedUser);
 
             if (projectTaskId.HasValue)
             {
@@ -142,7 +157,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             }
 
             var userIds = comments
-                .Where(c => !string.IsNullOrEmpty(c.CreatedBy))
+                .Where(c => c.CreatedBy != null)
                 .Select(c => c.CreatedBy!.ToLowerInvariant())
                 .Distinct()
                 .ToList();
@@ -173,7 +188,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             foreach (var c in comments)
             {
                 List<AspNetUserLoginDocument>? matchingLogins = null;
-                if (!string.IsNullOrEmpty(c.CreatedBy))
+                if (c.CreatedBy != null)
                 {
                     loginsByUserId.TryGetValue(c.CreatedBy, out matchingLogins);
                 }
@@ -231,14 +246,18 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 .WithParameter("@userId", userId);
 
             using var feed = _usersContainer.GetItemQueryIterator<AspNetUserDocument>(query);
-            if (feed.HasMoreResults)
+            string? foundUserName = null;
+            while (feed.HasMoreResults)
             {
                 var response = await feed.ReadNextAsync();
                 var user = response.FirstOrDefault();
-                return user?.UserName;
+                if (user?.UserName != null && foundUserName == null)
+                {
+                    foundUserName = user.UserName;
+                }
             }
 
-            return null;
+            return foundUserName;
         }
     }
 }

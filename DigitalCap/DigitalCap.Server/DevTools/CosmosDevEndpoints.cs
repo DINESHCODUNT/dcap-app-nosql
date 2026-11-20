@@ -170,6 +170,7 @@ namespace DigitalCap.Server.DevTools
             MapParityBatch7(app);
             MapParityBatch8(app);
             MapParityBatch9(app);
+            MapParityBatch10A(app);
             MapDevCopyTable(app);
             return app;
         }
@@ -9390,6 +9391,1493 @@ namespace DigitalCap.Server.DevTools
             var bytes = System.Text.Encoding.UTF8.GetBytes(input);
             var hash = System.Security.Cryptography.SHA256.HashData(bytes);
             return Convert.ToHexString(hash);
+        }
+
+        private static void MapParityBatch10A(WebApplication app)
+        {
+            app.MapGet("/health/parity/batch10a", async (
+                string? writeTest,
+                IConfiguration config,
+                IServiceProvider sp) =>
+            {
+                var db = sp.GetRequiredService<ApplicationDbContext>();
+                var conn = db.Database.GetDbConnection();
+                if (conn.State != System.Data.ConnectionState.Open)
+                {
+                    await conn.OpenAsync();
+                }
+
+                var containerFactory = sp.GetRequiredService<ICosmosContainerFactory>();
+                var sqlUserAccountRepo = sp.GetRequiredService<UserAccountRepository>();
+                var cosmosUserAccountRepo = sp.GetRequiredService<CosmosUserAccountRepository>();
+                var sqlClientProfileRepo = sp.GetRequiredService<ClientProfileRepository>();
+                var cosmosClientProfileRepo = sp.GetRequiredService<CosmosClientProfileRepository>();
+                var sqlPermRepo = sp.GetRequiredService<UserPermissionRepository>();
+                var cosmosPermRepo = sp.GetRequiredService<CosmosUserPermissionRepository>();
+                var sqlPortRepo = sp.GetRequiredService<PortRepository>();
+                var cosmosPortRepo = sp.GetRequiredService<CosmosPortRepository>();
+                var sqlTaskRepo = sp.GetRequiredService<TaskRepository>();
+                var cosmosTaskRepo = sp.GetRequiredService<CosmosTaskRepository>();
+                var sqlActivityRepo = sp.GetRequiredService<ActivityRepository>();
+                var cosmosActivityRepo = sp.GetRequiredService<CosmosActivityRepository>();
+                var sqlFileStorageRepo = sp.GetRequiredService<FileStorageRepository>();
+                var cosmosFileStorageRepo = sp.GetRequiredService<CosmosFileStorageRepository>();
+                var sqlCommentRepo = sp.GetRequiredService<CommentRepository>();
+                var cosmosCommentRepo = sp.GetRequiredService<CosmosCommentRepository>();
+                var sqlCapRepo = sp.GetRequiredService<CapRepository>();
+                var cosmosCapRepo = sp.GetRequiredService<CosmosCapRepository>();
+                var sqlVesselRepo = sp.GetRequiredService<VesselRepository>();
+                var cosmosVesselRepo = sp.GetRequiredService<CosmosVesselRepository>();
+                var sqlProjectRepo = sp.GetRequiredService<ProjectRepository>();
+                var cosmosProjectRepo = sp.GetRequiredService<CosmosProjectRepository>();
+                var sqlDescRepo = sp.GetRequiredService<DescriptionRepository>();
+                var cosmosDescRepo = sp.GetRequiredService<CosmosDescriptionRepository>();
+                var sqlExportRepo = sp.GetRequiredService<ExportRepository>();
+                var cosmosExportRepo = sp.GetRequiredService<CosmosExportRepository>();
+                var sqlGradingRepo = sp.GetRequiredService<GradingRepository>();
+                var cosmosGradingRepo = sp.GetRequiredService<CosmosGradingRepository>();
+                var sqlTankRepo = sp.GetRequiredService<TankRepository>();
+                var cosmosTankRepo = sp.GetRequiredService<CosmosTankRepository>();
+                var sqlReportPartRepo = sp.GetRequiredService<ReportPartRepository>();
+                var cosmosReportPartRepo = sp.GetRequiredService<CosmosReportPartRepository>();
+
+                var checks = new List<object>();
+                var writeSteps = new List<object>();
+                bool allPassed = true;
+                bool hadException = false;
+                var methodPositiveRows = new Dictionary<string, int>();
+
+                static object? DateKey(DateTime? d)
+                {
+                    if (!d.HasValue) return null;
+                    return d.Value.Ticks / 40000; // 40,000 ticks = 4 ms
+                }
+
+                // Reference queries from DB
+                var realUser = await conn.QueryFirstOrDefaultAsync<(string Id, string Email, string UserName)>(
+                    "SELECT TOP 1 Id, Email, UserName FROM [dbo].[AspNetUsers] WHERE Id IS NOT NULL AND Email IS NOT NULL AND UserName IS NOT NULL AND Active = 1");
+                var realClientId = await conn.QueryFirstOrDefaultAsync<Guid>(
+                    "SELECT TOP 1 Id FROM [CAP].[Clients] WHERE Id IS NOT NULL AND Id != '00000000-0000-0000-0000-000000000000'");
+                var realPort = await conn.QueryFirstOrDefaultAsync<int>(
+                    "SELECT TOP 1 Id FROM [core].[PortOfCall] WHERE Id IS NOT NULL");
+                var realProject = await conn.QueryFirstOrDefaultAsync<(int Id, int? ClientId, int? Imo, string VesselType, string LeadSurveyor)>(
+                    "SELECT TOP 1 ID as Id, ClientProfileId as ClientId, IMO as Imo, VesselType, LeadSurveyor FROM [CAP].[Projects] WHERE ID IS NOT NULL AND IMO IS NOT NULL AND IMO > 0");
+                var realTask = await conn.QueryFirstOrDefaultAsync<(int Id, int? ProjectId)>(
+                    "SELECT TOP 1 ID as Id, ProjectId FROM [CAP].[ProjectTaskStatus] WHERE ID IS NOT NULL AND ProjectId IS NOT NULL");
+                var realVesselType = await conn.QueryFirstOrDefaultAsync<string>(
+                    "SELECT TOP 1 VesselType FROM [dbo].[VesselType] WHERE VesselType IS NOT NULL") ?? "Bulk Carrier";
+                var realTemplate = await conn.QueryFirstOrDefaultAsync<(int TemplateId, string TemplateName)>(
+                    "SELECT TOP 1 TemplateId, TemplateName FROM [dbo].[H&I_ReportTemplate] WHERE TemplateId IS NOT NULL AND TemplateName IS NOT NULL");
+                if (realTemplate.TemplateId == 0) realTemplate = (1, "Bulk Carrier");
+                var realTankType = await conn.QueryFirstOrDefaultAsync<string>(
+                    "SELECT TOP 1 TankType FROM [dbo].[Vessel_TankMapping] WHERE TankType IS NOT NULL") ?? "Ballast Tank";
+                var realRole = await conn.QueryFirstOrDefaultAsync<string>(
+                    "SELECT TOP 1 Name FROM [dbo].[AspNetRoles] WHERE Name IS NOT NULL") ?? "Admin";
+
+                // ==========================================
+                // 1. Group 1 (Batches 1-3) Read Checks
+                // ==========================================
+                // A1: GetByAspNetIdAsync (all columns)
+                if (realUser.Id != null)
+                {
+                    var sqlU = await sqlUserAccountRepo.GetByAspNetIdAsync(realUser.Id);
+                    var cosU = await cosmosUserAccountRepo.GetByAspNetIdAsync(realUser.Id);
+                    methodPositiveRows["UserAccount.GetByAspNetIdAsync"] = sqlU != null ? 1 : 0;
+                    if (sqlU == null && cosU == null)
+                    {
+                        checks.Add(new { check = $"A1.UserAccount.GetByAspNetIdAsync({realUser.Id})", equal = false, error = "Both null on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Single($"A1.UserAccount.GetByAspNetIdAsync({realUser.Id})", sqlU, cosU,
+                            ("Id", x => x.Id),
+                            ("AspNetUserId", x => x.AspNetUserId),
+                            ("ClientId", x => x.ClientId),
+                            ("FirstName", x => x.FirstName),
+                            ("LastName", x => x.LastName),
+                            ("Company", x => x.Company),
+                            ("Email", x => x.Email),
+                            ("Phone", x => x.Phone),
+                            ("TimeZone", x => x.TimeZone),
+                            ("CreatedBy", x => x.CreatedBy),
+                            ("CreatedAt", x => DateKey(x.CreatedAt)),
+                            ("UpdatedBy", x => x.UpdatedBy),
+                            ("UpdatedAt", x => DateKey(x.UpdatedAt)),
+                            ("Deleted", x => x.Deleted)));
+                    }
+                }
+
+                // A2: GetClientAdminsAsync (ClientAdminDto all columns, S5)
+                if (realClientId != Guid.Empty)
+                {
+                    var sqlAdmins = (await sqlClientProfileRepo.GetClientAdminsAsync(realClientId)).ToList();
+                    var cosAdmins = (await cosmosClientProfileRepo.GetClientAdminsAsync(realClientId)).ToList();
+                    methodPositiveRows["ClientProfile.GetClientAdminsAsync"] = sqlAdmins.Count;
+                    if (sqlAdmins.Count == 0 && cosAdmins.Count == 0)
+                    {
+                        checks.Add(new { check = $"A2.ClientProfile.GetClientAdminsAsync({realClientId})", equal = false, error = "Both empty on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists($"A2.ClientProfile.GetClientAdminsAsync({realClientId})", sqlAdmins, cosAdmins, x => x.Email, false,
+                            ("FirstName", x => x.FirstName),
+                            ("LastName", x => x.LastName),
+                            ("Email", x => x.Email),
+                            ("UserRole", x => x.UserRole)));
+                    }
+                }
+
+                // A3: GetAbsUsersAsync (all columns)
+                {
+                    var sqlAbs = (await sqlUserAccountRepo.GetAbsUsersAsync()).ToList();
+                    var cosAbs = (await cosmosUserAccountRepo.GetAbsUsersAsync()).ToList();
+                    methodPositiveRows["UserAccount.GetAbsUsersAsync"] = sqlAbs.Count;
+                    if (sqlAbs.Count == 0 && cosAbs.Count == 0)
+                    {
+                        checks.Add(new { check = "A3.UserAccount.GetAbsUsersAsync", equal = false, error = "Both empty on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists("A3.UserAccount.GetAbsUsersAsync", sqlAbs, cosAbs, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("AspNetUserId", x => x.AspNetUserId),
+                            ("FirstName", x => x.FirstName),
+                            ("LastName", x => x.LastName),
+                            ("Company", x => x.Company),
+                            ("Email", x => x.Email),
+                            ("Phone", x => x.Phone),
+                            ("TimeZone", x => x.TimeZone),
+                            ("UserRole", x => x.UserRole)));
+                    }
+                }
+
+                // A4 & A5: GetClientUsersAsync (all columns, Company = c.CompanyName AS Company, S5)
+                if (realClientId != Guid.Empty)
+                {
+                    var sqlCu = (await sqlUserAccountRepo.GetClientUsersAsync(realClientId.ToString())).ToList();
+                    var cosCu = (await cosmosUserAccountRepo.GetClientUsersAsync(realClientId.ToString())).ToList();
+                    methodPositiveRows["UserAccount.GetClientUsersAsync"] = sqlCu.Count;
+                    if (sqlCu.Count == 0 && cosCu.Count == 0)
+                    {
+                        checks.Add(new { check = $"A4_A5.UserAccount.GetClientUsersAsync({realClientId})", equal = false, error = "Both empty on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists($"A4_A5.UserAccount.GetClientUsersAsync({realClientId})", sqlCu, cosCu, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("AspNetUserId", x => x.AspNetUserId),
+                            ("FirstName", x => x.FirstName),
+                            ("LastName", x => x.LastName),
+                            ("Email", x => x.Email),
+                            ("Company", x => x.Company),
+                            ("Phone", x => x.Phone),
+                            ("TimeZone", x => x.TimeZone),
+                            ("UserRole", x => x.UserRole)));
+                    }
+                }
+
+                // A7 (T-e): Null parameters on GetClientUsersAsync (call SQL too and compare)
+                {
+                    var sqlNullCu = (await sqlUserAccountRepo.GetClientUsersAsync(null!)).ToList();
+                    var cosNullCu = (await cosmosUserAccountRepo.GetClientUsersAsync(null!)).ToList();
+                    bool eqA7 = sqlNullCu.Count == 0 && cosNullCu.Count == 0;
+                    checks.Add(new { check = "A7.UserAccount.GetClientUsersAsync(null)", equal = eqA7, sqlCount = sqlNullCu.Count, cosCount = cosNullCu.Count });
+                    if (!eqA7) allPassed = false;
+                }
+
+                // A8: UserPermission GetAllRoles & Users in Role (trailing space S2 to BOTH sides)
+                {
+                    var sqlRoles = await sqlPermRepo.GetAllRoles();
+                    var cosRoles = await cosmosPermRepo.GetAllRoles();
+                    methodPositiveRows["UserPermission.GetAllRoles"] = sqlRoles.Count;
+                    checks.Add(ParityCompare.Lists("A8.UserPermission.GetAllRoles", sqlRoles, cosRoles, x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("Name", x => x.Name)));
+
+                    var sqlUir = (await sqlUserAccountRepo.GetUsersInRoleAsync(realRole + "   ")).ToList();
+                    var cosUir = (await cosmosUserAccountRepo.GetUsersInRoleAsync(realRole + "   ")).ToList();
+                    methodPositiveRows["UserAccount.GetUsersInRoleAsync"] = sqlUir.Count;
+                    if (sqlUir.Count == 0 && cosUir.Count == 0)
+                    {
+                        checks.Add(new { check = $"A8.UserAccount.GetUsersInRoleAsync.TrailingSpaces({realRole})", equal = false, error = "Both empty on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists($"A8.UserAccount.GetUsersInRoleAsync.TrailingSpaces({realRole})", sqlUir, cosUir, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("AspNetUserId", x => x.AspNetUserId),
+                            ("FirstName", x => x.FirstName),
+                            ("LastName", x => x.LastName),
+                            ("Email", x => x.Email)));
+                    }
+                }
+
+                // A9: Port Search & GetById (all columns)
+                if (realPort != 0)
+                {
+                    var sqlP = await sqlPortRepo.GetById(realPort);
+                    var cosP = await cosmosPortRepo.GetById(realPort);
+                    methodPositiveRows["Port.GetById"] = sqlP != null ? 1 : 0;
+                    if (sqlP == null && cosP == null)
+                    {
+                        checks.Add(new { check = $"A9.Port.GetById({realPort})", equal = false, error = "Both null on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Single($"A9.Port.GetById({realPort})", sqlP, cosP,
+                            ("Id", x => x.Id),
+                            ("Code", x => x.Code),
+                            ("Name", x => x.Name),
+                            ("CountryCode", x => x.CountryCode)));
+                    }
+
+                    var sqlSearch = (await sqlPortRepo.Search("Singapore")).ToList();
+                    var cosSearch = (await cosmosPortRepo.Search("Singapore")).ToList();
+                    methodPositiveRows["Port.Search"] = sqlSearch.Count;
+                    checks.Add(ParityCompare.Lists("A9.Port.Search(Singapore)", sqlSearch, cosSearch, x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("Code", x => x.Code),
+                        ("Name", x => x.Name),
+                        ("CountryCode", x => x.CountryCode)));
+                }
+
+                // ==========================================
+                // 2. Group 2 (Batch 4) Read Checks
+                // ==========================================
+                // B1 & B6: GetCap2Tasks (all columns)
+                if (realProject.Id != 0)
+                {
+                    var sqlTasks = (await sqlTaskRepo.GetCap2Tasks(realProject.Id)).ToList();
+                    var cosTasks = (await cosmosTaskRepo.GetCap2Tasks(realProject.Id)).ToList();
+                    methodPositiveRows["Task.GetCap2Tasks"] = sqlTasks.Count;
+                    if (sqlTasks.Count == 0 && cosTasks.Count == 0)
+                    {
+                        checks.Add(new { check = $"B1_B6.Task.GetCap2Tasks({realProject.Id})", equal = false, error = "Both empty on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists($"B1_B6.Task.GetCap2Tasks({realProject.Id})", sqlTasks, cosTasks, x => x.ID, false,
+                            ("ID", x => x.ID),
+                            ("ProjectId", x => x.ProjectId),
+                            ("TaskId", x => x.TaskId),
+                            ("StatusId", x => x.StatusId),
+                            ("Task", x => x.Task),
+                            ("Status", x => x.Status),
+                            ("Notes", x => x.Notes),
+                            ("AssignedTo", x => x.AssignedTo),
+                            ("NumberOfComments", x => x.NumberOfComments),
+                            ("NumberOfAttachments", x => x.NumberOfAttachments)));
+                    }
+                }
+
+                // B2: GetRecentActivitiesAsync2 (all columns, ordered)
+                {
+                    var sqlActs = (await sqlActivityRepo.GetRecentActivitiesAsync2(1, 10)).ToList();
+                    var cosActs = (await cosmosActivityRepo.GetRecentActivitiesAsync2(1, 10)).ToList();
+                    methodPositiveRows["Activity.GetRecentActivitiesAsync2"] = sqlActs.Count;
+                    checks.Add(ParityCompare.Lists("B2.Activity.GetRecentActivitiesAsync2(1, 10)", sqlActs, cosActs, null, true,
+                        ("ID", x => x.ID),
+                        ("ProjectId", x => x.ProjectId),
+                        ("PIDNumber", x => x.PIDNumber),
+                        ("VesselName", x => x.VesselName),
+                        ("Text", x => x.Text),
+                        ("CreateBy", x => x.CreateBy),
+                        ("CreateDttm", x => DateKey(x.CreateDttm))));
+                }
+
+                // B3 (T-i): GetRecentActivitiesByProjectIdAsync
+                if (realProject.Id != 0)
+                {
+                    var sqlProjActs = (await sqlActivityRepo.GetRecentActivitiesByProjectIdAsync(10, realProject.Id)).ToList();
+                    var cosProjActs = (await cosmosActivityRepo.GetRecentActivitiesByProjectIdAsync(10, realProject.Id)).ToList();
+                    methodPositiveRows["Activity.GetRecentActivitiesByProjectIdAsync"] = sqlProjActs.Count;
+                    checks.Add(ParityCompare.Lists($"B3.Activity.GetRecentActivitiesByProjectIdAsync({realProject.Id})", sqlProjActs, cosProjActs, null, true,
+                        ("ID", x => x.ID),
+                        ("ProjectId", x => x.ProjectId),
+                        ("PIDNumber", x => x.PIDNumber),
+                        ("VesselName", x => x.VesselName),
+                        ("Text", x => x.Text),
+                        ("CreateBy", x => x.CreateBy),
+                        ("CreateDttm", x => DateKey(x.CreateDttm))));
+                }
+
+                // B5: GetCap2Task (all columns)
+                if (realTask.Id != 0)
+                {
+                    var sqlSingle = await sqlTaskRepo.GetCap2Task(realTask.Id);
+                    var cosSingle = await cosmosTaskRepo.GetCap2Task(realTask.Id);
+                    methodPositiveRows["Task.GetCap2Task"] = sqlSingle != null ? 1 : 0;
+                    if (sqlSingle == null && cosSingle == null)
+                    {
+                        checks.Add(new { check = $"B5.Task.GetCap2Task({realTask.Id})", equal = false, error = "Both null on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Single($"B5.Task.GetCap2Task({realTask.Id})", sqlSingle, cosSingle,
+                            ("ID", x => x.ID),
+                            ("ProjectId", x => x.ProjectId),
+                            ("TaskId", x => x.TaskId),
+                            ("StatusId", x => x.StatusId),
+                            ("Task", x => x.Task),
+                            ("Status", x => x.Status),
+                            ("Notes", x => x.Notes),
+                            ("AssignedTo", x => x.AssignedTo),
+                            ("NumberOfComments", x => x.NumberOfComments),
+                            ("NumberOfAttachments", x => x.NumberOfAttachments)));
+                    }
+                }
+
+                // B7: GetProjectFiles (all columns)
+                if (realProject.Id != 0)
+                {
+                    var sqlFiles = (await sqlFileStorageRepo.GetProjectFiles(realProject.Id)).ToList();
+                    var cosFiles = (await cosmosFileStorageRepo.GetProjectFiles(realProject.Id)).ToList();
+                    methodPositiveRows["FileStorage.GetProjectFiles"] = sqlFiles.Count;
+                    checks.Add(ParityCompare.Lists($"B7.FileStorage.GetProjectFiles({realProject.Id})", sqlFiles, cosFiles, x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("ProjectId", x => x.ProjectId),
+                        ("TaskId", x => x.TaskId),
+                        ("Name", x => x.Name),
+                        ("Extension", x => x.Extension),
+                        ("StorageKey", x => x.StorageKey),
+                        ("MimeType", x => x.MimeType),
+                        ("UploadedBy", x => x.UploadedBy),
+                        ("LastModifiedDate", x => DateKey(x.LastModifiedDate))));
+                }
+
+                // B9: GetCommentsByProjectIdAsync (all columns)
+                if (realProject.Id != 0)
+                {
+                    var sqlComms = (await sqlCommentRepo.GetCommentsByProjectIdAsync(realProject.Id)).ToList();
+                    var cosComms = (await cosmosCommentRepo.GetCommentsByProjectIdAsync(realProject.Id)).ToList();
+                    methodPositiveRows["Comment.GetCommentsByProjectIdAsync"] = sqlComms.Count;
+                    checks.Add(ParityCompare.Lists($"B9.Comment.GetCommentsByProjectIdAsync({realProject.Id})", sqlComms, cosComms, x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("ProjectId", x => x.ProjectId),
+                        ("ProjectTaskId", x => x.ProjectTaskId),
+                        ("Comment", x => x.Comment),
+                        ("CreatedBy", x => x.CreatedBy),
+                        ("LastModifiedDate", x => DateKey(x.LastModifiedDate.UtcDateTime))));
+                }
+
+                // ==========================================
+                // 3. Group 3 (Batch 5 - Cap & Vessel) Read Checks
+                // ==========================================
+                // C1 & C3: GetCapIndexAsync (all columns)
+                {
+                    var sqlCapIdx = (await sqlCapRepo.GetCapIndexAsync()).ToList();
+                    var cosCapIdx = (await cosmosCapRepo.GetCapIndexAsync()).ToList();
+                    methodPositiveRows["Cap.GetCapIndexAsync"] = sqlCapIdx.Count;
+                    checks.Add(ParityCompare.Lists("C1_C3.Cap.GetCapIndexAsync", sqlCapIdx, cosCapIdx, x => x.ID, false,
+                        ("ID", x => x.ID),
+                        ("Name", x => x.Name),
+                        ("CapRegion", x => x.CapRegion),
+                        ("ProjectStatusName", x => x.ProjectStatusName),
+                        ("PIDNumber", x => x.PIDNumber),
+                        ("CompanyName", x => x.CompanyName),
+                        ("IMO", x => x.IMO),
+                        ("VesselName", x => x.VesselName),
+                        ("ProjectPriority", x => x.ProjectPriority),
+                        ("WCN", x => x.WCN)));
+
+                    var sqlCertsCount = await sqlCapRepo.GetCertsCountAsync();
+                    var cosCertsCount = await cosmosCapRepo.GetCertsCountAsync();
+                    methodPositiveRows["Cap.GetCertsCountAsync"] = sqlCertsCount?.Count ?? 0;
+                    checks.Add(ParityCompare.Single("C2.Cap.GetCertsCountAsync", sqlCertsCount, cosCertsCount,
+                        ("Count", x => x.Count)));
+                }
+
+                // V1, V2, V3: Vessel MainData (all 31 columns)
+                if (realProject.Id != 0)
+                {
+                    var sqlMd = (await sqlVesselRepo.GetVesselMainData(realProject.Id))?.ToList() ?? new List<ReportVesselMainData>();
+                    var cosMd = (await cosmosVesselRepo.GetVesselMainData(realProject.Id))?.ToList() ?? new List<ReportVesselMainData>();
+                    methodPositiveRows["Vessel.GetVesselMainData"] = sqlMd.Count;
+                    if (sqlMd.Count == 0 && cosMd.Count == 0)
+                    {
+                        checks.Add(new { check = $"V1_V2_V3.Vessel.GetVesselMainData({realProject.Id})", equal = false, error = "Both empty on real input" });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        checks.Add(ParityCompare.Lists($"V1_V2_V3.Vessel.GetVesselMainData({realProject.Id})", sqlMd, cosMd, null, false,
+                            ("projectId", x => x.projectId),
+                            ("vesselName", x => x.vesselName),
+                            ("imoNumber", x => x.imoNumber),
+                            ("yearBuilt", x => x.yearBuilt),
+                            ("builtBy", x => x.builtBy),
+                            ("length", x => x.length),
+                            ("breadth", x => x.breadth),
+                            ("depth", x => x.depth),
+                            ("draft", x => x.draft),
+                            ("grossTons", x => x.grossTons),
+                            ("netTons", x => x.netTons),
+                            ("deadweight", x => x.deadweight),
+                            ("vesselType", x => x.vesselType),
+                            ("callSign", x => x.callSign),
+                            ("officalNumber", x => x.officalNumber),
+                            ("homeport", x => x.homeport),
+                            ("previousName", x => x.previousName),
+                            ("ownerName", x => x.ownerName),
+                            ("manager", x => x.manager),
+                            ("hullNo", x => x.hullNo),
+                            ("propulsionType", x => x.propulsionType),
+                            ("kw", x => x.kw),
+                            ("propulsionManufacturer", x => x.propulsionManufacturer),
+                            ("gearManufacturer", x => x.gearManufacturer),
+                            ("classed", x => x.classed),
+                            ("classNotation", x => x.classNotation),
+                            ("machinery", x => x.machinery),
+                            ("other", x => x.other),
+                            ("environment", x => x.environment),
+                            ("selectedPrefix", x => x.selectedPrefix),
+                            ("firstVisitDate", x => x.firstVisitDate),
+                            ("lastVisitDate", x => x.lastVisitDate)));
+                    }
+
+                    // V11: StatutoryCertificate (all dates)
+                    var sqlCert = await sqlVesselRepo.GetStatutoryCertificate(realProject.Id);
+                    var cosCert = await cosmosVesselRepo.GetStatutoryCertificate(realProject.Id);
+                    methodPositiveRows["Vessel.GetStatutoryCertificate"] = sqlCert != null ? 1 : 0;
+                    checks.Add(ParityCompare.Single($"V11.Vessel.GetStatutoryCertificate({realProject.Id})", sqlCert, cosCert,
+                        ("Exp_LLLI", x => DateKey(x?.StatutoryCertificatesExpirationDates?.LLLIDate)),
+                        ("Exp_SafetyCon", x => DateKey(x?.StatutoryCertificatesExpirationDates?.SafetyConDate)),
+                        ("Exp_SafetyRadio", x => DateKey(x?.StatutoryCertificatesExpirationDates?.SafetyRadioDate)),
+                        ("Exp_SafetyEquip", x => DateKey(x?.StatutoryCertificatesExpirationDates?.SafetyEquipmentDate)),
+                        ("Exp_IEE", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IEEDate)),
+                        ("Exp_IOPP", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IOPPDate)),
+                        ("Exp_IAP", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IAPDate)),
+                        ("Exp_IAFS", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IAFSDate)),
+                        ("Exp_ISPS", x => DateKey(x?.StatutoryCertificatesExpirationDates?.ISPSDate)),
+                        ("Exp_IBWM", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IBWMDate)),
+                        ("Exp_ISPPSewage", x => DateKey(x?.StatutoryCertificatesExpirationDates?.ISPPSewageDate)),
+                        ("Exp_ISM", x => DateKey(x?.StatutoryCertificatesExpirationDates?.ISMDate)),
+                        ("Exp_MaritimeLabour", x => DateKey(x?.StatutoryCertificatesExpirationDates?.MaritimeLabourDate)),
+                        ("Exp_GasCarrierFitness", x => DateKey(x?.StatutoryCertificatesExpirationDates?.GasCarrierFitness)),
+                        ("Iss_LLLI", x => DateKey(x?.StatutoryCertificatesIssuedDates?.LLLIDate)),
+                        ("Iss_SafetyCon", x => DateKey(x?.StatutoryCertificatesIssuedDates?.SafetyConDate)),
+                        ("Iss_SafetyRadio", x => DateKey(x?.StatutoryCertificatesIssuedDates?.SafetyRadioDate)),
+                        ("Iss_SafetyEquip", x => DateKey(x?.StatutoryCertificatesIssuedDates?.SafetyEquipmentDate)),
+                        ("Iss_IEE", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IEEDate)),
+                        ("Iss_IOPP", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IOPPDate)),
+                        ("Iss_IAP", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IAPDate)),
+                        ("Iss_IAFS", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IAFSDate)),
+                        ("Iss_ISPS", x => DateKey(x?.StatutoryCertificatesIssuedDates?.ISPSDate)),
+                        ("Iss_IBWM", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IBWMDate)),
+                        ("Iss_ISPPSewage", x => DateKey(x?.StatutoryCertificatesIssuedDates?.ISPPSewageDate)),
+                        ("Iss_ISM", x => DateKey(x?.StatutoryCertificatesIssuedDates?.ISMDate)),
+                        ("Iss_MaritimeLabour", x => DateKey(x?.StatutoryCertificatesIssuedDates?.MaritimeLabourDate)),
+                        ("Iss_GasCarrierFitness", x => DateKey(x?.StatutoryCertificatesIssuedDates?.GasCarrierFitness))));
+                }
+
+                // V16: Details (char(7), S2 match, S3, all columns)
+                if (realProject.Imo.HasValue && realProject.Imo.Value > 0)
+                {
+                    var imoStr = realProject.Imo.Value.ToString();
+                    var sqlDet = await sqlVesselRepo.Details(imoStr);
+                    var cosDet = await cosmosVesselRepo.Details(imoStr);
+                    methodPositiveRows["Vessel.Details"] = sqlDet != null ? 1 : 0;
+                    checks.Add(ParityCompare.Single($"V16.Vessel.Details({imoStr})", sqlDet, cosDet,
+                        ("Vessel_ID", x => x.Vessel_ID),
+                        ("IMONum", x => x.IMONum),
+                        ("VesselName", x => x.VesselName),
+                        ("HullNum", x => x.HullNum),
+                        ("Builder", x => x.Builder),
+                        ("DWT", x => x.DWT),
+                        ("GT", x => x.GT),
+                        ("NetTonnage", x => x.NetTonnage),
+                        ("Length", x => x.Length),
+                        ("Breadth", x => x.Breadth),
+                        ("Depth", x => x.Depth),
+                        ("CallSign", x => x.CallSign),
+                        ("FlagName", x => x.FlagName),
+                        ("VesselType", x => x.VesselType)));
+                }
+
+                // ==========================================
+                // 4. Group 4 (Batch 5 - Project) Read Checks
+                // ==========================================
+                if (realProject.Id != 0)
+                {
+                    // P5, P14: GetProject (all columns)
+                    var sqlProj = await sqlProjectRepo.GetProject(realProject.Id);
+                    var cosProj = await cosmosProjectRepo.GetProject(realProject.Id);
+                    methodPositiveRows["Project.GetProject"] = sqlProj != null ? 1 : 0;
+                    checks.Add(ParityCompare.Single($"P5_P14.Project.GetProject({realProject.Id})", sqlProj, cosProj,
+                        ("Id", x => x.Id),
+                        ("Name", x => x.Name),
+                        ("IMO", x => x.IMO),
+                        ("PIDNumber", x => x.PIDNumber),
+                        ("VesselType", x => x.VesselType),
+                        ("ShipType", x => x.ShipType),
+                        ("LeadSurveyor", x => x.LeadSurveyor),
+                        ("SecondSurveyor", x => x.SecondSurveyor),
+                        ("CapRegion", x => x.CapRegion),
+                        ("ProjectStatus", x => x.ProjectStatus),
+                        ("ClientProfileId", x => x.ClientProfileId),
+                        ("PercentComplete", x => x.PercentComplete),
+                        ("CreatedDate", x => DateKey(x.CreatedDate)),
+                        ("CreatedBy", x => x.CreatedBy)));
+
+                    // P2 (T-i): GetProjectCountGroupedByClientIdAsync (all columns)
+                    var sqlProjCount = (await sqlProjectRepo.GetProjectCountGroupedByClientIdAsync()).ToList();
+                    var cosProjCount = (await cosmosProjectRepo.GetProjectCountGroupedByClientIdAsync()).ToList();
+                    methodPositiveRows["Project.GetProjectCountGroupedByClientIdAsync"] = sqlProjCount.Count;
+                    checks.Add(ParityCompare.Lists("P2.Project.GetProjectCountGroupedByClientIdAsync", sqlProjCount, cosProjCount, x => x.ClientId, false,
+                        ("ClientId", x => x.ClientId),
+                        ("ClientName", x => x.ClientName),
+                        ("ProjectCount", x => x.ProjectCount)));
+
+                    // P8: Lookups and missing
+                    var sqlPn = await sqlProjectRepo.GetProjectName(realProject.Id);
+                    var cosPn = await cosmosProjectRepo.GetProjectName(realProject.Id);
+                    var sqlImo = await sqlProjectRepo.GetIMONumberByProjectId(realProject.Id);
+                    var cosImo = await cosmosProjectRepo.GetIMONumberByProjectId(realProject.Id);
+                    var sqlVt = await sqlProjectRepo.GetProjectVesselType(realProject.Id);
+                    var cosVt = await cosmosProjectRepo.GetProjectVesselType(realProject.Id);
+
+                    var cosPnM = await cosmosProjectRepo.GetProjectName(-99999);
+                    var cosImoM = await cosmosProjectRepo.GetIMONumberByProjectId(-99999);
+                    var cosVtM = await cosmosProjectRepo.GetProjectVesselType(-99999);
+
+                    bool eqLookups = string.Equals(sqlPn, cosPn, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(sqlImo, cosImo, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(sqlVt, cosVt, StringComparison.OrdinalIgnoreCase)
+                        && cosPnM == null && cosImoM == null && cosVtM == null;
+                    methodPositiveRows["Project.Lookups"] = eqLookups ? 1 : 0;
+                    checks.Add(new { check = $"P8.Project.LookupsAndMissing({realProject.Id})", equal = eqLookups, cosPnM, cosImoM, cosVtM });
+                    if (!eqLookups) allPassed = false;
+
+                    // P4: GetDetails (all columns)
+                    var sqlDet = (await sqlProjectRepo.GetDetails(realProject.Id)).ToList();
+                    var cosDet = (await cosmosProjectRepo.GetDetails(realProject.Id)).ToList();
+                    methodPositiveRows["Project.GetDetails"] = sqlDet.Count;
+                    checks.Add(ParityCompare.Lists($"P4.Project.GetDetails({realProject.Id})", sqlDet, cosDet, x => x.Name, false,
+                        ("Name", x => x.Name),
+                        ("Type", x => x.Type),
+                        ("LastModifiedDate", x => DateKey(x.LastModifiedDate))));
+
+                    // P6, P7, P18: GetSummary (all columns)
+                    var sqlSum = await sqlProjectRepo.GetSummary(realProject.Id);
+                    var cosSum = await cosmosProjectRepo.GetSummary(realProject.Id);
+                    methodPositiveRows["Project.GetSummary"] = sqlSum != null ? 1 : 0;
+                    checks.Add(ParityCompare.Single($"P6_P7_P18.Project.GetSummary({realProject.Id})", sqlSum, cosSum,
+                        ("ID", x => x.ID),
+                        ("Name", x => x.Name),
+                        ("ProjectId", x => x.ProjectId),
+                        ("IMO", x => x.IMO),
+                        ("PIDNumber", x => x.PIDNumber),
+                        ("VesselName", x => x.VesselName),
+                        ("ShipType", x => x.ShipType),
+                        ("CapRegion", x => x.CapRegion),
+                        ("YearBuilt", x => x.YearBuilt),
+                        ("AgreementOwner", x => x.AgreementOwner),
+                        ("AgreementNumber", x => x.AgreementNumber),
+                        ("ProjectComments", x => x.ProjectComments),
+                        ("AreTechnicalTasksComplete", x => x.AreTechnicalTasksComplete),
+                        ("AreInvoiceTasksComplete", x => x.AreInvoiceTasksComplete),
+                        ("TechnicalTasksCompletionPercentage", x => x.TechnicalTasksCompletionPercentage),
+                        ("InvoiceTasksCompletionPercentage", x => x.InvoiceTasksCompletionPercentage),
+                        ("ProjectPriority", x => x.ProjectPriority),
+                        ("TechnicalDaysWorked", x => x.TechnicalDaysWorked),
+                        ("InvoiceDaysWorked", x => x.InvoiceDaysWorked)));
+                }
+
+                // P3, P9, P10, P15, P17: Grids, Export and Stats (all columns)
+                {
+                    var sqlGrid = (await sqlProjectRepo.GetAllProjectsGridData()).ToList();
+                    var cosGrid = (await cosmosProjectRepo.GetAllProjectsGridData()).ToList();
+                    methodPositiveRows["Project.GetAllProjectsGridData"] = sqlGrid.Count;
+                    checks.Add(ParityCompare.Lists("P9_P10.Project.GetAllProjectsGridData", sqlGrid, cosGrid, x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("PIDNumber", x => x.PIDNumber),
+                        ("CompanyName", x => x.CompanyName),
+                        ("CapRegion", x => x.CapRegion),
+                        ("VesselName", x => x.VesselName),
+                        ("IMO", x => x.IMO),
+                        ("WCN", x => x.WCN),
+                        ("ProjectPriority", x => x.ProjectPriority),
+                        ("PercentComplete", x => x.PercentComplete)));
+
+                    var sqlExport = await sqlProjectRepo.GetAllProjectsGridExport();
+                    var cosExport = await cosmosProjectRepo.GetAllProjectsGridExport();
+                    methodPositiveRows["Project.GetAllProjectsGridExport"] = sqlExport.Count;
+                    checks.Add(ParityCompare.Lists("P3.Project.GetAllProjectsGridExport", sqlExport, cosExport, x => x.ID, false,
+                        ("ID", x => x.ID),
+                        ("Name", x => x.Name),
+                        ("PIDNumber", x => x.PIDNumber),
+                        ("CapRegion", x => x.CapRegion),
+                        ("CapScope", x => x.CapScope),
+                        ("ProjectStatus", x => x.ProjectStatus),
+                        ("ProjectPriority", x => x.ProjectPriority),
+                        ("SpecialHull", x => x.SpecialHull),
+                        ("Fatigue", x => x.Fatigue)));
+
+                    var sqlStats = await sqlProjectRepo.GetProjectStats();
+                    var cosStats = await cosmosProjectRepo.GetProjectStats();
+                    methodPositiveRows["Project.GetProjectStats"] = sqlStats != null ? 1 : 0;
+                    bool eqStats = sqlStats != null && cosStats != null
+                        && sqlStats.Total == cosStats.Total
+                        && sqlStats.Online == cosStats.Online
+                        && sqlStats.Offline == cosStats.Offline
+                        && sqlStats.Regions.Count == cosStats.Regions.Count
+                        && sqlStats.Regions.All(kv => cosStats.Regions.TryGetValue(kv.Key, out var v) && v == kv.Value)
+                        && sqlStats.Statuses.Count == cosStats.Statuses.Count
+                        && sqlStats.Statuses.All(kv => cosStats.Statuses.TryGetValue(kv.Key, out var v) && v == kv.Value);
+                    checks.Add(new { check = "P10_P15_P17.Project.GetProjectStats", equal = eqStats, sqlTotal = sqlStats?.Total, cosmosTotal = cosStats?.Total });
+                    if (!eqStats) allPassed = false;
+                }
+
+                // ==========================================
+                // 5. Group 5 (Batch 6) Read Checks
+                // ==========================================
+                // D7: Description GetGradingTemplates (all columns)
+                {
+                    var sqlTemplates = await sqlDescRepo.GetGradingTemplates();
+                    var cosTemplates = await cosmosDescRepo.GetGradingTemplates();
+                    methodPositiveRows["Description.GetGradingTemplates"] = sqlTemplates.Count;
+                    checks.Add(ParityCompare.Lists("D7.Description.GetGradingTemplates", sqlTemplates, cosTemplates, x => x.TemplateId, false,
+                        ("TemplateId", x => x.TemplateId),
+                        ("TemplateName", x => x.TemplateName)));
+
+                    // D3 (T-e): GetAllDescription (all columns)
+                    var sqlDescAll = await sqlDescRepo.GetAllDescription(1, 10);
+                    var cosDescAll = await cosmosDescRepo.GetAllDescription(1, 10);
+                    methodPositiveRows["Description.GetAllDescription"] = sqlDescAll?.Data?.Count ?? 0;
+                    bool eqPaging = sqlDescAll != null && cosDescAll != null && sqlDescAll.Total == cosDescAll.Total;
+                    checks.Add(new { check = "D3.Description.GetAllDescription.Paging", equal = eqPaging, sqlTotal = sqlDescAll?.Total, cosmosTotal = cosDescAll?.Total });
+                    if (!eqPaging) allPassed = false;
+
+                    checks.Add(ParityCompare.Lists("D3.Description.GetAllDescription.Data", sqlDescAll?.Data ?? new List<ImageDescriptions>(), cosDescAll?.Data ?? new List<ImageDescriptions>(), x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("Description", x => x.Description),
+                        ("CategoryId", x => x.CategoryId),
+                        ("ProjectId", x => x.ProjectId),
+                        ("VesselType", x => x.VesselType),
+                        ("TemplateId", x => x.TemplateId),
+                        ("TemplateName", x => x.TemplateName),
+                        ("IsActive", x => x.IsActive),
+                        ("IsDeleted", x => x.IsDeleted),
+                        ("SectionId", x => x.SectionId),
+                        ("SectionName", x => x.SectionName),
+                        ("TankTypeId", x => x.TankTypeId)));
+
+                    // D2, D7b (T-e): GetImageDescriptionsByProjectId
+                    if (realProject.Id != 0)
+                    {
+                        var sqlImgDesc = await sqlDescRepo.GetImageDescriptionsByProjectId(realProject.Id);
+                        var cosImgDesc = await cosmosDescRepo.GetImageDescriptionsByProjectId(realProject.Id);
+                        methodPositiveRows["Description.GetImageDescriptionsByProjectId"] = sqlImgDesc.Count;
+                        checks.Add(ParityCompare.Lists($"D2_D7b.Description.GetImageDescriptionsByProjectId({realProject.Id})", sqlImgDesc, cosImgDesc, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("Description", x => x.Description),
+                            ("CategoryId", x => x.CategoryId),
+                            ("ProjectId", x => x.ProjectId),
+                            ("VesselType", x => x.VesselType),
+                            ("TemplateId", x => x.TemplateId),
+                            ("TemplateName", x => x.TemplateName),
+                            ("IsActive", x => x.IsActive),
+                            ("IsDeleted", x => x.IsDeleted),
+                            ("SectionId", x => x.SectionId),
+                            ("SectionName", x => x.SectionName),
+                            ("TankTypeId", x => x.TankTypeId)));
+                    }
+
+                    // D4 (T-e): CheckImageDescriptionExistsOrNot (real and null)
+                    var sqlNullDesc = (await sqlDescRepo.CheckImageDescriptionExistsOrNot(null!, null!, null!, null!)).ToList();
+                    var cosNullDesc = (await cosmosDescRepo.CheckImageDescriptionExistsOrNot(null!, null!, null!, null!)).ToList();
+                    bool eqNullDesc = sqlNullDesc.Count == 0 && cosNullDesc.Count == 0;
+                    checks.Add(new { check = "D4.Description.CheckImageDescriptionExistsOrNot.NullParams", equal = eqNullDesc, sqlCount = sqlNullDesc.Count, cosCount = cosNullDesc.Count });
+                    if (!eqNullDesc) allPassed = false;
+
+                    // D1, D5 (T-e / T-i): GetDescriptionSectionNamesByTemplateNameAndVesselType
+                    var sqlDescSecs = await sqlDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(realTemplate.TemplateName, realVesselType);
+                    var cosDescSecs = await cosmosDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(realTemplate.TemplateName, realVesselType);
+                    methodPositiveRows["Description.GetDescriptionSectionNamesByTemplateNameAndVesselType"] = sqlDescSecs.Count;
+                    checks.Add(ParityCompare.Lists($"D1.Description.GetDescriptionSectionNames({realTemplate.TemplateName}, {realVesselType})", sqlDescSecs, cosDescSecs, x => x.SectionId, false,
+                        ("SectionId", x => x.SectionId),
+                        ("SectionName", x => x.SectionName)));
+
+                    var sqlNullSec = await sqlDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(null!, realVesselType);
+                    var cosNullSec = await cosmosDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(null!, realVesselType);
+                    bool eqNullSec = sqlNullSec.Count == 0 && cosNullSec.Count == 0;
+                    checks.Add(new { check = "D5.Description.GetDescriptionSectionNames.NullTemplateName", equal = eqNullSec, sqlCount = sqlNullSec.Count, cosCount = cosNullSec.Count });
+                    if (!eqNullSec) allPassed = false;
+
+                    // D6 (T-i): GetGradingSections
+                    var sqlDescGradSec = await sqlDescRepo.GetGradingSections(realTemplate.TemplateId, realVesselType);
+                    var cosDescGradSec = await cosmosDescRepo.GetGradingSections(realTemplate.TemplateId, realVesselType);
+                    methodPositiveRows["Description.GetGradingSections"] = sqlDescGradSec.Count;
+                    checks.Add(ParityCompare.Lists($"D6.Description.GetGradingSections({realTemplate.TemplateId}, {realVesselType})", sqlDescGradSec, cosDescGradSec, x => x.SectionId, false,
+                        ("SectionId", x => x.SectionId),
+                        ("SectionName", x => x.SectionName)));
+                }
+
+                // E1 & D8: Export Part Configuration (all columns)
+                {
+                    var sqlExportParts = await sqlExportRepo.GetVesselTypeExportPartConfiguration(1);
+                    var cosExportParts = await cosmosExportRepo.GetVesselTypeExportPartConfiguration(1);
+                    methodPositiveRows["Export.GetVesselTypeExportPartConfiguration"] = sqlExportParts.Count;
+                    checks.Add(ParityCompare.Lists("E1_D8.Export.GetVesselTypeExportPartConfiguration(1)", sqlExportParts, cosExportParts, x => x.PartId, false,
+                        ("PartId", x => x.PartId),
+                        ("PartName", x => x.PartName)));
+                }
+
+                // ==========================================
+                // 6. Group 6 (Batches 7-8) Read Checks
+                // ==========================================
+                // G1, T5: Grading
+                if (realVesselType != null)
+                {
+                    var sqlGradSec = await sqlGradingRepo.GetGradingSections(1, realVesselType + "   ");
+                    var cosGradSec = await cosmosGradingRepo.GetGradingSections(1, realVesselType + "   ");
+                    methodPositiveRows["Grading.GetGradingSections"] = sqlGradSec.Count;
+                    checks.Add(ParityCompare.Lists($"G1_T5.Grading.GetGradingSections.TrailingSpaces({realVesselType})", sqlGradSec, cosGradSec, x => x.SectionId, false,
+                        ("SectionId", x => x.SectionId),
+                        ("SectionName", x => x.SectionName)));
+
+                    // T1 place 4: GetTanks_VesselByVesselType (trailing spaces sent to BOTH sides)
+                    var sqlTanksVt = await sqlTankRepo.GetTanks_VesselByVesselType(realVesselType + "   ");
+                    var cosTanksVt = await cosmosTankRepo.GetTanks_VesselByVesselType(realVesselType + "   ");
+                    methodPositiveRows["Tank.GetTanks_VesselByVesselType"] = sqlTanksVt.Count;
+                    checks.Add(ParityCompare.Lists($"T1_P4.Tank.GetTanks_VesselByVesselType.TrailingSpaces({realVesselType})", sqlTanksVt, cosTanksVt, x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("VesselType", x => x.VesselType),
+                        ("TankTypeId", x => x.TankTypeId),
+                        ("TankName", x => x.TankName),
+                        ("CreatedDttm", x => DateKey(x.CreatedDttm)),
+                        ("UpdateDttm", x => DateKey(x.UpdateDttm))));
+                }
+
+                if (realProject.Imo.HasValue && realProject.Imo.Value > 0)
+                {
+                    string imoStr = realProject.Imo.Value.ToString();
+                    // T1 place 1: GetTanks_VesselByIMO (trailing spaces sent to BOTH sides)
+                    var sqlTanksImo = await sqlTankRepo.GetTanks_VesselByIMO(imoStr + "   ");
+                    var cosTanksImo = await cosmosTankRepo.GetTanks_VesselByIMO(imoStr + "   ");
+                    methodPositiveRows["Tank.GetTanks_VesselByIMO"] = sqlTanksImo.Count;
+                    checks.Add(ParityCompare.Lists($"T1_P1.Tank.GetTanks_VesselByIMO.TrailingSpaces({imoStr})", sqlTanksImo, cosTanksImo, x => x.Id, false,
+                        ("Id", x => x.Id),
+                        ("ImoNumber", x => x.ImoNumber),
+                        ("ProjectId", x => x.ProjectId),
+                        ("TankTypeId", x => x.TankTypeId),
+                        ("TankName", x => x.TankName),
+                        ("CreatedDttm", x => DateKey(x.CreatedDttm)),
+                        ("UpdateDttm", x => DateKey(x.UpdateDttm))));
+
+                    if (realProject.Id != 0)
+                    {
+                        // T1 place 2: GetTanks_VesselByProject (trailing spaces sent to BOTH sides)
+                        var sqlTanksProj = await sqlTankRepo.GetTanks_VesselByProject(imoStr + "   ", realProject.Id);
+                        var cosTanksProj = await cosmosTankRepo.GetTanks_VesselByProject(imoStr + "   ", realProject.Id);
+                        methodPositiveRows["Tank.GetTanks_VesselByProject"] = sqlTanksProj.Count;
+                        checks.Add(ParityCompare.Lists($"T1_P2.Tank.GetTanks_VesselByProject({imoStr}, {realProject.Id})", sqlTanksProj, cosTanksProj, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("ImoNumber", x => x.ImoNumber),
+                            ("ProjectId", x => x.ProjectId),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("TankName", x => x.TankName),
+                            ("CreatedDttm", x => DateKey(x.CreatedDttm)),
+                            ("UpdateDttm", x => DateKey(x.UpdateDttm))));
+
+                        // T1 place 3: GetTemplateTanks (trailing spaces sent to BOTH sides)
+                        var sqlTanksTmpl = await sqlTankRepo.GetTemplateTanks(realTemplate.TemplateId, imoStr + "   ", realVesselType, realProject.Id);
+                        var cosTanksTmpl = await cosmosTankRepo.GetTemplateTanks(realTemplate.TemplateId, imoStr + "   ", realVesselType, realProject.Id);
+                        methodPositiveRows["Tank.GetTemplateTanks"] = sqlTanksTmpl.Count;
+                        checks.Add(ParityCompare.Lists($"T1_P3.Tank.GetTemplateTanks({imoStr})", sqlTanksTmpl, cosTanksTmpl, x => x.Id, false,
+                            ("Id", x => x.Id),
+                            ("TankName", x => x.TankName),
+                            ("TankTypeId", x => x.TankTypeId),
+                            ("Subheader", x => x.Subheader)));
+                    }
+
+                    // T1 place 4: GetProjectNames (trailing spaces sent to BOTH sides)
+                    var sqlProjNames = await sqlTankRepo.GetProjectNames(imoStr + "   ");
+                    var cosProjNames = await cosmosTankRepo.GetProjectNames(imoStr + "   ");
+                    methodPositiveRows["Tank.GetProjectNames"] = sqlProjNames.Count;
+                    checks.Add(ParityCompare.Lists($"T1_P4.Tank.GetProjectNames({imoStr})", sqlProjNames, cosProjNames, x => x.ProjectId, false,
+                        ("Text", x => x.Text),
+                        ("Value", x => x.Value),
+                        ("ProjectId", x => x.ProjectId)));
+                }
+
+                // R1 & R2: ReportPart (all columns, real and null)
+                {
+                    var sqlSecNames = await sqlReportPartRepo.GetSectionNamesByPartNameAsync(1, "HULL");
+                    var cosSecNames = await cosmosReportPartRepo.GetSectionNamesByPartNameAsync(1, "HULL");
+                    methodPositiveRows["ReportPart.GetSectionNamesByPartNameAsync"] = sqlSecNames.NormalSections?.Count ?? 0;
+                    checks.Add(ParityCompare.Lists("R1.ReportPart.GetSectionNamesByPartNameAsync.Normal", sqlSecNames.NormalSections ?? new List<NormalSectionNames>(), cosSecNames.NormalSections ?? new List<NormalSectionNames>(), x => x.SectionId, false,
+                        ("SectionId", x => x.SectionId),
+                        ("SectionName", x => x.SectionName),
+                        ("PartId", x => x.PartId),
+                        ("PartName", x => x.PartName),
+                        ("VesselTypeId", x => x.VesselTypeId),
+                        ("SubHeader", x => x.SubHeader),
+                        ("TotalCards", x => x.TotalCards),
+                        ("PlaceholderCount", x => x.PlaceholderCount),
+                        ("FileNameCount", x => x.FileNameCount),
+                        ("IsActive", x => x.IsActive)));
+
+                    var sqlSecNamesNull = await sqlReportPartRepo.GetSectionNamesByPartNameAsync(1, null!);
+                    var cosSecNamesNull = await cosmosReportPartRepo.GetSectionNamesByPartNameAsync(1, null!);
+                    bool eqR1Null = (sqlSecNamesNull.NormalSections?.Count ?? 0) == 0 && (cosSecNamesNull.NormalSections?.Count ?? 0) == 0;
+                    checks.Add(new { check = "R1.ReportPart.GetSectionNamesByPartNameAsync.NullPartName", equal = eqR1Null, sqlCount = sqlSecNamesNull.NormalSections?.Count ?? 0, cosCount = cosSecNamesNull.NormalSections?.Count ?? 0 });
+                    if (!eqR1Null) allPassed = false;
+
+                    var sqlExportSec = await sqlReportPartRepo.GetVesselTypeExportSectionConfiguration(1, 1);
+                    var cosExportSec = await cosmosReportPartRepo.GetVesselTypeExportSectionConfiguration(1, 1);
+                    methodPositiveRows["ReportPart.GetVesselTypeExportSectionConfiguration"] = sqlExportSec.Count;
+                    checks.Add(ParityCompare.Lists("R2.ReportPart.GetVesselTypeExportSectionConfiguration(1, 1)", sqlExportSec, cosExportSec, x => x.SectionId, false,
+                        ("SectionId", x => x.SectionId),
+                        ("SectionName", x => x.SectionName)));
+                }
+
+                // ==========================================
+                // 7. Known Bug Checks (T-f)
+                // ==========================================
+                // P1: GetAllProjects() throws
+                {
+                    Type? sqlP1Ex = null; string? sqlP1Msg = null;
+                    Type? cosP1Ex = null; string? cosP1Msg = null;
+                    try { await sqlProjectRepo.GetAllProjects(); } catch (Exception ex) { sqlP1Ex = ex.GetType(); sqlP1Msg = ex.Message; }
+                    try { await cosmosProjectRepo.GetAllProjects(); } catch (Exception ex) { cosP1Ex = ex.GetType(); cosP1Msg = ex.Message; }
+                    bool p1Ok = sqlP1Ex != null && cosP1Ex != null
+                        && sqlP1Ex == cosP1Ex
+                        && sqlP1Msg != null && cosP1Msg != null
+                        && string.Equals(sqlP1Msg, cosP1Msg, StringComparison.OrdinalIgnoreCase);
+                    checks.Add(new { check = "T-f.KnownBug.P1.GetAllProjects", equal = p1Ok, sqlEx = sqlP1Ex?.Name, cosEx = cosP1Ex?.Name, sqlP1Msg, cosP1Msg });
+                    if (!p1Ok) allPassed = false;
+                }
+
+                // V8: UpdateReportMainDataAsync on missing project throws
+                {
+                    Type? sqlV8Ex = null; string? sqlV8Msg = null;
+                    Type? cosV8Ex = null; string? cosV8Msg = null;
+                    try { await sqlVesselRepo.UpdateReportMainDataAsync(new Report(), -99888); } catch (Exception ex) { sqlV8Ex = ex.GetType(); sqlV8Msg = ex.Message; }
+                    try { await cosmosVesselRepo.UpdateReportMainDataAsync(new Report(), -99888); } catch (Exception ex) { cosV8Ex = ex.GetType(); cosV8Msg = ex.Message; }
+                    bool v8Ok = sqlV8Ex != null && cosV8Ex != null
+                        && sqlV8Ex == cosV8Ex
+                        && sqlV8Msg != null && cosV8Msg != null
+                        && string.Equals(sqlV8Msg, cosV8Msg, StringComparison.OrdinalIgnoreCase);
+                    checks.Add(new { check = "T-f.KnownBug.V8.UpdateReportMainDataAsync.MissingProject", equal = v8Ok, sqlEx = sqlV8Ex?.Name, cosEx = cosV8Ex?.Name, sqlV8Msg, cosV8Msg });
+                    if (!v8Ok) allPassed = false;
+                }
+
+                // V15: GetSurveyStatus returns null, UpdateSurveyAudit throws ArgumentNullException
+                if (realProject.Id != 0)
+                {
+                    var sqlV15Res = await sqlVesselRepo.GetSurveyStatus(realProject.Id);
+                    var cosV15Res = await cosmosVesselRepo.GetSurveyStatus(realProject.Id);
+                    bool v15GetOk = sqlV15Res == null && cosV15Res == null;
+                    checks.Add(new { check = $"T-f.KnownBug.V15.GetSurveyStatus({realProject.Id})", equal = v15GetOk, sqlNull = sqlV15Res == null, cosNull = cosV15Res == null });
+                    if (!v15GetOk) allPassed = false;
+
+                    Type? sqlV15AuditEx = null; string? sqlV15AuditMsg = null;
+                    Type? cosV15AuditEx = null; string? cosV15AuditMsg = null;
+                    try { await sqlVesselRepo.UpdateSurveyAudit(new SurveyStatus(), realProject.Id); } catch (Exception ex) { sqlV15AuditEx = ex.GetType(); sqlV15AuditMsg = ex.Message; }
+                    try { await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus(), realProject.Id); } catch (Exception ex) { cosV15AuditEx = ex.GetType(); cosV15AuditMsg = ex.Message; }
+                    bool v15AuditOk = sqlV15AuditEx != null && cosV15AuditEx != null
+                        && sqlV15AuditEx == typeof(ArgumentNullException) && cosV15AuditEx == typeof(ArgumentNullException);
+                    checks.Add(new { check = $"T-f.KnownBug.V15.UpdateSurveyAudit({realProject.Id})", equal = v15AuditOk, sqlEx = sqlV15AuditEx?.Name, cosEx = cosV15AuditEx?.Name, sqlV15AuditMsg, cosV15AuditMsg });
+                    if (!v15AuditOk) allPassed = false;
+                }
+
+                // R-2arg: CreateVesselMainDataAsync 2-argument returns null
+                {
+                    var sqlR2 = await sqlVesselRepo.CreateVesselMainDataAsync("-999", new Project { Id = -999 });
+                    var cosR2 = await cosmosVesselRepo.CreateVesselMainDataAsync("-999", new Project { Id = -999 });
+                    bool r2Ok = sqlR2 == null && cosR2 == null;
+                    checks.Add(new { check = "T-f.KnownBug.R2arg.CreateVesselMainDataAsync", equal = r2Ok, sqlNull = sqlR2 == null, cosNull = cosR2 == null });
+                    if (!r2Ok) allPassed = false;
+                }
+
+                // ==========================================
+                // 8. V4 & V5 Helper Checks (T-g)
+                // ==========================================
+                {
+                    var testDates = new[]
+                    {
+                        new DateTime(2026, 5, 4, 3, 15, 0),   // single-digit day (4) and hour (3)
+                        new DateTime(2026, 11, 20, 0, 5, 0),  // 12 AM
+                        new DateTime(2026, 11, 20, 12, 0, 0), // 12 PM
+                        new DateTime(1900, 1, 1, 0, 0, 0)     // Jan  1 1900 12:00AM
+                    };
+                    foreach (var td in testDates)
+                    {
+                        var sqlVal = await conn.QueryFirstOrDefaultAsync<string>("SELECT CONVERT(nvarchar(max), @d)", new { d = td });
+                        var helperVal = CosmosVesselRepository.FormatSqlStyle0(td);
+                        bool eq = string.Equals(sqlVal, helperVal, StringComparison.OrdinalIgnoreCase);
+                        checks.Add(new { check = $"T-g.V4.FormatSqlStyle0({td:yyyy-MM-dd HH:mm})", sql = sqlVal, cosmos = helperVal, equal = eq });
+                        if (!eq) allPassed = false;
+                    }
+
+                    var testReals = new object[] { 0, 1.5, 123456.7, 1234567, 0.0001234, -12.25, 1e-5 };
+                    foreach (var tr in testReals)
+                    {
+                        var sqlVal = await conn.QueryFirstOrDefaultAsync<string>("SELECT CONVERT(nvarchar(max), CAST(@v AS real))", new { v = tr });
+                        var helperVal = CosmosVesselRepository.FormatReal(tr);
+                        bool eq = string.Equals(sqlVal, helperVal, StringComparison.OrdinalIgnoreCase);
+                        checks.Add(new { check = $"T-g.V5.FormatReal({tr})", sql = sqlVal, cosmos = helperVal, equal = eq });
+                        if (!eq) allPassed = false;
+                    }
+                }
+
+                // ==========================================
+                // 9. Method Positive Rows Check (T-b)
+                // ==========================================
+                foreach (var kvp in methodPositiveRows)
+                {
+                    bool hasPositive = kvp.Value > 0;
+                    checks.Add(new { check = $"T-b.PositiveRowsCheck.{kvp.Key}", equal = hasPositive, rowCount = kvp.Value });
+                    if (!hasPositive) allPassed = false;
+                }
+
+                // ==========================================
+                // 10. Write Tests in Partitions -999 / -998 (T-h)
+                // ==========================================
+                if (!string.Equals(writeTest, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    allPassed = allPassed && !hadException
+                        && checks.All(c =>
+                        {
+                            var prop = c.GetType().GetProperty("equal") ?? c.GetType().GetProperty("match") ?? c.GetType().GetProperty("allMatch");
+                            if (prop != null)
+                            {
+                                var val = prop.GetValue(c);
+                                if (val is bool b) return b;
+                            }
+                            var errProp = c.GetType().GetProperty("error");
+                            if (errProp != null) return false;
+                            return true;
+                        });
+
+                    return Results.Ok(new
+                    {
+                        summary = allPassed ? "ALL READ PARITY CHECKS PASSED" : "ONE OR MORE PARITY CHECKS FAILED",
+                        allPassed,
+                        checksCount = checks.Count,
+                        checks,
+                        writeStepsSkipped = "Pass ?writeTest=true to execute write tests in partition -999/-998"
+                    });
+                }
+
+                var clientsContainer = containerFactory.GetContainer(CosmosContainers.CAP_Clients);
+                var userContainer = containerFactory.GetContainer(CosmosContainers.dbo_UserAccounts);
+                var commentsContainer = containerFactory.GetContainer(CosmosContainers.CAP_Comments);
+                var fileContainer = containerFactory.GetContainer(CosmosContainers.CAP_Files);
+                var projectContainer = containerFactory.GetContainer(CosmosContainers.CAP_Projects);
+                var tankContainer = containerFactory.GetContainer(CosmosContainers.dbo_Vessel_TankMapping);
+                var vesselContainer = containerFactory.GetContainer(CosmosContainers.dbo_ReportVesselMainData);
+                var certsContainer = containerFactory.GetContainer(CosmosContainers.dbo_ReportStatutoryCertificates);
+                var rolePermContainer = containerFactory.GetContainer(CosmosContainers.dbo_RolePermissionsMapping);
+                var actContainer = containerFactory.GetContainer(CosmosContainers.CAP_Activities);
+                var ptsContainer = containerFactory.GetContainer(CosmosContainers.CAP_ProjectTaskStatus);
+
+                var cleanupList = new List<(Container container, string id, PartitionKey pk)>();
+
+                try
+                {
+                    // Empty-before check across all 11 write containers
+                    var preCp = await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9991'");
+                    var preUser = await SafeQueryAsync<object>(userContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9992'");
+                    var preRolePerm = await SafeQueryAsync<object>(rolePermContainer, "SELECT * FROM c WHERE c.PermissionId = 'ffffffff-ffff-ffff-ffff-ffffffff9996' OR c.Id = 'ffffffff-ffff-ffff-ffff-ffffffff9998'");
+                    var preComment = await SafeQueryAsync<object>(commentsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                    var preFile = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                    var preProj = await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
+                    var preTank = await SafeQueryAsync<object>(tankContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                    var preVessel = await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
+                    var preCert = await SafeQueryAsync<object>(certsContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
+                    var preAct = await SafeQueryAsync<object>(actContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                    var prePts = await SafeQueryAsync<object>(ptsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+
+                    bool preCheckPassed = preCp.Count == 0 && preUser.Count == 0 && preRolePerm.Count == 0 && preComment.Count == 0
+                        && preFile.Count == 0 && preProj.Count == 0 && preTank.Count == 0 && preVessel.Count == 0
+                        && preCert.Count == 0 && preAct.Count == 0 && prePts.Count == 0;
+
+                    if (!preCheckPassed)
+                    {
+                        writeSteps.Add(new { step = "T-h.PreCheck", passed = false, error = "Partitions -999 / -998 are not empty. Skipping all writes." });
+                        allPassed = false;
+                    }
+                    else
+                    {
+                        // A6: AddRolePermissionAsync (writes rolepermission.Id on every row, distinct id, cleaned up)
+                        var templateGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9996");
+                        var roleIdGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9997");
+                        var templateId = "tmpl-" + templateGuid.ToString("D").ToLowerInvariant();
+                        var templateDoc = new RolePermissionsMappingDocument
+                        {
+                            id = templateId,
+                            Id = Guid.NewGuid(),
+                            PermissionId = templateGuid,
+                            RoleId = null,
+                            IsReadable = true,
+                            IsEditable = true
+                        };
+                        await rolePermContainer.CreateItemAsync(templateDoc, new PartitionKey(templateId));
+                        cleanupList.Add((rolePermContainer, templateId, new PartitionKey(templateId)));
+
+                        var inputGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9998");
+                        bool addRes = await cosmosPermRepo.AddRolePermissionAsync(new DigitalCap.Core.Models.Permissions.UserRolePermission
+                        {
+                            Id = inputGuid,
+                            RoleId = roleIdGuid,
+                            PermissionId = templateGuid
+                        });
+
+                        var createdRolePerms = await SafeQueryAsync<RolePermissionsMappingDocument>(
+                            rolePermContainer,
+                            $"SELECT * FROM c WHERE c.RoleId = '{roleIdGuid}'");
+
+                        bool a6Ok = addRes && createdRolePerms.Count == 1 && createdRolePerms[0].Id == inputGuid;
+                        foreach (var doc in createdRolePerms)
+                        {
+                            cleanupList.Add((rolePermContainer, doc.id, new PartitionKey(doc.id)));
+                        }
+                        writeSteps.Add(new { step = "A6.UserPermission.AddRolePermissionAsync", passed = a6Ok });
+                        if (!a6Ok) allPassed = false;
+
+                        // A10: ClientProfile.SaveClientProfileAsync missing throws; AddAsync rejects null; AddAsync valid writes and reads back; SaveClientProfileAsync updates
+                        bool a10MissingThrows = false;
+                        try
+                        {
+                            await cosmosClientProfileRepo.SaveClientProfileAsync(new Client { Id = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9999"), CompanyName = "Missing" });
+                        }
+                        catch (Exception ex) when (ex.Message.Contains("Update failed. No rows affected."))
+                        {
+                            a10MissingThrows = true;
+                        }
+
+                        bool a10NullReject = false;
+                        try
+                        {
+                            await cosmosClientProfileRepo.AddAsync(new Client
+                            {
+                                Id = Guid.NewGuid(),
+                                CompanyName = null!,
+                                CompanyAddress = "ValidAddress"
+                            });
+                        }
+                        catch (ArgumentException)
+                        {
+                            a10NullReject = true;
+                        }
+
+                        var a10Guid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9991");
+                        var a10Id = a10Guid.ToString("D").ToLowerInvariant();
+                        await cosmosClientProfileRepo.AddAsync(new Client
+                        {
+                            Id = a10Guid,
+                            CompanyName = "TestClientA10",
+                            CompanyAddress = "123 Valid St",
+                            Wcn = "WCN1"
+                        });
+                        cleanupList.Add((clientsContainer, a10Id, new PartitionKey(a10Id)));
+
+                        var readA10 = await SafeReadAsync<ClientsDocument>(clientsContainer, a10Id, new PartitionKey(a10Id));
+                        bool a10InsertOk = readA10 != null && readA10.CompanyName == "TestClientA10" && readA10.CompanyAddress == "123 Valid St" && readA10.Wcn == "WCN1";
+
+                        await cosmosClientProfileRepo.SaveClientProfileAsync(new Client
+                        {
+                            Id = a10Guid,
+                            CompanyName = "TestClientA10_Updated",
+                            CompanyAddress = "456 Updated St"
+                        });
+                        var readA10Upd = await SafeReadAsync<ClientsDocument>(clientsContainer, a10Id, new PartitionKey(a10Id));
+                        bool a10UpdOk = readA10Upd != null && readA10Upd.CompanyName == "TestClientA10_Updated" && readA10Upd.CompanyAddress == "456 Updated St";
+
+                        bool a10AllOk = a10MissingThrows && a10NullReject && a10InsertOk && a10UpdOk;
+                        writeSteps.Add(new { step = "A10.ClientProfile.ValidationAndFullReadBack", passed = a10AllOk, a10MissingThrows, a10NullReject, a10InsertOk, a10UpdOk });
+                        if (!a10AllOk) allPassed = false;
+
+                        // A11: UserAccount.InsertAsync rejects duplicate PK
+                        var a11Guid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9992");
+                        var a11Id = a11Guid.ToString("D").ToLowerInvariant();
+                        var a11Doc = new UserAccountDocument
+                        {
+                            id = a11Id,
+                            Id = a11Guid,
+                            ClientId = a11Guid,
+                            FirstName = "TestA11",
+                            Deleted = false
+                        };
+                        await userContainer.CreateItemAsync(a11Doc, new PartitionKey(a11Id));
+                        cleanupList.Add((userContainer, a11Id, new PartitionKey(a11Id)));
+
+                        bool a11DuplicateRejected = false;
+                        try
+                        {
+                            await cosmosUserAccountRepo.InsertAsync(new UserAccountModel
+                            {
+                                Id = a11Guid,
+                                ClientId = Guid.NewGuid(),
+                                FirstName = "Duplicate"
+                            });
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("Violation of PRIMARY KEY constraint"))
+                        {
+                            a11DuplicateRejected = true;
+                        }
+                        writeSteps.Add(new { step = "A11.UserAccount.InsertAsync.RejectsDuplicatePK", passed = a11DuplicateRejected });
+                        if (!a11DuplicateRejected) allPassed = false;
+
+                        // B8 Comment: CreateCommentAsync rejects empty, writes activity; UpdateCommentAsync missing no throw
+                        bool b8CommentReject = false;
+                        try
+                        {
+                            await cosmosCommentRepo.CreateCommentAsync(-999, null, "admin", "");
+                        }
+                        catch (ArgumentException)
+                        {
+                            b8CommentReject = true;
+                        }
+
+                        var b8Acts = await SafeQueryAsync<ActivityDocument>(
+                            actContainer,
+                            "SELECT * FROM c WHERE c.ProjectId = -999",
+                            new PartitionKey(-999.0));
+
+                        bool b8ActWritten = b8Acts.Count > 0 && b8Acts.Any(a => a.Text == null && a.CreateBy == "admin");
+                        foreach (var a in b8Acts)
+                        {
+                            cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
+                        }
+
+                        bool b8UpdThrown = false;
+                        try
+                        {
+                            await cosmosCommentRepo.UpdateCommentAsync(-99888, -99888, null, "new text", "admin");
+                        }
+                        catch
+                        {
+                            b8UpdThrown = true;
+                        }
+
+                        bool b8CommentOk = b8CommentReject && b8ActWritten && !b8UpdThrown;
+                        writeSteps.Add(new { step = "B8.Comment.ThrowsActivityWrittenAndMissingNoThrow", passed = b8CommentOk, b8CommentReject, b8ActWritten, missingNoThrow = !b8UpdThrown });
+                        if (!b8CommentOk) allPassed = false;
+
+                        // B8 FileStorage: Save null throws; Update missing throws; nothing written
+                        bool b8FileSaveReject = false;
+                        try
+                        {
+                            await cosmosFileStorageRepo.SaveProjectFile(new ProjectFile { ProjectId = -999, Name = null! }, "dummyKey", "admin");
+                        }
+                        catch (ArgumentNullException)
+                        {
+                            b8FileSaveReject = true;
+                        }
+
+                        bool b8FileUpdReject = false;
+                        try
+                        {
+                            await cosmosFileStorageRepo.UpdateFileMetadata(-99888, FileDataType.Photos, "new_name", true, "admin");
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("Could not find file"))
+                        {
+                            b8FileUpdReject = true;
+                        }
+
+                        var fileDocs = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        bool b8FileOk = b8FileSaveReject && b8FileUpdReject && fileDocs.Count == 0;
+                        writeSteps.Add(new { step = "B8.FileStorage.ValidationAndMissingThrowsNothingWritten", passed = b8FileOk, b8FileSaveReject, b8FileUpdReject, fileCount = fileDocs.Count });
+                        if (!b8FileOk) allPassed = false;
+
+                        // P12 & P13 on all 4 methods: UpdatePercentComplete, Update_Project, UpdateProjectStatus, UpdatePriority
+                        var projDoc = new ProjectDocument
+                        {
+                            id = "-999",
+                            ID = -999,
+                            Name = "TestProject-999",
+                            PercentComplete = 10,
+                            ProjectStatus = 1,
+                            ProjectPriority = 1,
+                            CapRegion = "Americas",
+                            IsDeleted = false
+                        };
+                        await projectContainer.CreateItemAsync(projDoc, new PartitionKey("-999"));
+                        cleanupList.Add((projectContainer, "-999", new PartitionKey("-999")));
+
+                        // Method 1: UpdatePercentComplete (also tests P11: currentUser null -> "SYSTEM")
+                        int updPcExists = await cosmosProjectRepo.UpdatePercentComplete(-999, 85, null!);
+                        int updPcMissing = await cosmosProjectRepo.UpdatePercentComplete(-99888, 85, null!);
+                        var readPc = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
+                        bool p12Ok = updPcExists == 1 && updPcMissing == 0 && readPc?.PercentComplete == 85;
+
+                        // Method 2: Update_Project
+                        await cosmosProjectRepo.Update_Project(new Project { Id = -999, Name = "UpdatedProject-999", CRMOpportunityNumber = "CRM999" }, "admin");
+                        await cosmosProjectRepo.Update_Project(new Project { Id = -99888, Name = "Missing" }, "admin");
+                        var readProj = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
+                        bool p13ProjOk = readProj?.Name == "UpdatedProject-999";
+
+                        // Method 3: UpdateProjectStatus
+                        await cosmosProjectRepo.UpdateProjectStatus(-999, "uid", 2, "admin");
+                        await cosmosProjectRepo.UpdateProjectStatus(-99888, "uid", 2, "admin");
+                        var readStatus = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
+                        bool p13StatusOk = readStatus?.ProjectStatus == 2;
+
+                        // Method 4: UpdatePriority
+                        await cosmosProjectRepo.UpdatePriority(-999, 5, "admin");
+                        await cosmosProjectRepo.UpdatePriority(-999, null, "admin");
+                        await cosmosProjectRepo.UpdatePriority(-99888, 5, "admin");
+                        var readPrio = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
+                        bool p13PrioOk = readPrio?.ProjectPriority == null;
+
+                        bool all4MethodsOk = p12Ok && p13ProjOk && p13StatusOk && p13PrioOk;
+                        writeSteps.Add(new { step = "P12_P13.Project.All4UpdateMethods.ExistsAndMissing", passed = all4MethodsOk, p12Ok, p13ProjOk, p13StatusOk, p13PrioOk });
+                        if (!all4MethodsOk) allPassed = false;
+
+                        // P16: CreateProject text length cut, dates .Date, ShipType int mapping, full read back
+                        var newProj = new Project
+                        {
+                            Name = "TestP16",
+                            CRMOpportunityNumber = "12345678901234567890EXTRAEXTRA", // > 20 chars
+                            VesselType = new string('A', 500), // > 450 chars
+                            ShipType = ShipType.BulkCarrier,
+                            PotentialDrydockDate = new DateTime(2026, 11, 20, 14, 30, 0)
+                        };
+                        int newP16Id = await cosmosProjectRepo.CreateProject(newProj, "admin");
+                        cleanupList.Add((projectContainer, newP16Id.ToString(), new PartitionKey(newP16Id.ToString())));
+                        var readP16 = await SafeReadAsync<ProjectDocument>(projectContainer, newP16Id.ToString(), new PartitionKey(newP16Id.ToString()));
+                        bool p16Ok = readP16 != null
+                            && readP16.CRMOpportunityNumber?.Length == 20
+                            && readP16.VesselType?.Length == 450
+                            && readP16.CreatedDate?.TimeOfDay == TimeSpan.Zero
+                            && readP16.PotentialDrydockDate?.TimeOfDay == TimeSpan.Zero
+                            && readP16.ShipType?.ToString() == "1"; // ShipType.BulkCarrier int mapping
+                        writeSteps.Add(new { step = "P16.CreateProject.TextCutAndDatesAndShipType", passed = p16Ok });
+                        if (!p16Ok) allPassed = false;
+
+                        // T4: CreateTank date < 1753 rejected without write; valid tank writes and reads back
+                        var badTank = new VesselTank
+                        {
+                            Id = Guid.NewGuid(),
+                            ProjectId = -999,
+                            TankName = "BadDateTank",
+                            CreatedDttm = new DateTime(1700, 1, 1),
+                            UpdateDttm = new DateTime(1700, 1, 1)
+                        };
+                        bool createBadTankRes = await cosmosTankRepo.CreateTank(badTank);
+                        var readBadTank = await SafeReadAsync<VesselTankMappingDocument>(tankContainer, badTank.Id.ToString(), new PartitionKey(-999.0));
+                        bool t4BadOk = !createBadTankRes && readBadTank == null;
+
+                        var goodTankGuid = Guid.NewGuid();
+                        var goodTank = new VesselTank
+                        {
+                            Id = goodTankGuid,
+                            ProjectId = -999,
+                            TankName = "GoodTank",
+                            TankTypeId = 1,
+                            CreatedDttm = new DateTime(2026, 11, 20),
+                            UpdateDttm = new DateTime(2026, 11, 20)
+                        };
+                        bool createGoodTankRes = await cosmosTankRepo.CreateTank(goodTank);
+                        cleanupList.Add((tankContainer, goodTankGuid.ToString(), new PartitionKey(-999.0)));
+                        var readGoodTank = await SafeReadAsync<VesselTankMappingDocument>(tankContainer, goodTankGuid.ToString(), new PartitionKey(-999.0));
+                        bool t4GoodOk = createGoodTankRes && readGoodTank != null && readGoodTank.TankName == "GoodTank" && readGoodTank.TankTypeId == 1;
+
+                        bool t4Ok = t4BadOk && t4GoodOk;
+                        writeSteps.Add(new { step = "T4.Tank.CreateTank.ValidationAndWrite", passed = t4Ok, t4BadOk, t4GoodOk });
+                        if (!t4Ok) allPassed = false;
+
+                        // T3 (T-i): CreateTank rejects duplicate PK (loops all pages of COUNT query)
+                        bool createDupTankRes = await cosmosTankRepo.CreateTank(goodTank);
+                        bool t3Ok = !createDupTankRes;
+                        writeSteps.Add(new { step = "T3.Tank.CreateTank.RejectsDuplicatePK", passed = t3Ok });
+                        if (!t3Ok) allPassed = false;
+
+                        // V6 & V10: CreateVesselMainDataAsync (3 args) writes main data, full read back
+                        var v10Project = new Project
+                        {
+                            Id = -999,
+                            VesselName = "TestVessel-999",
+                            IMO = 1234567,
+                            Builder = "V10Builder",
+                            LengthOverall = 120.50m
+                        };
+                        var v10Vessel = new DigitalCap.Core.Models.VesselModel.Vessel
+                        {
+                            ImoNumber = "1234567",
+                            SelectedPrefix = 0
+                        };
+                        await cosmosVesselRepo.CreateVesselMainDataAsync("-999", v10Project, v10Vessel);
+                        cleanupList.Add((vesselContainer, "-999", new PartitionKey("-999")));
+                        var readV10 = await SafeReadAsync<ReportVesselMainDataDocument>(vesselContainer, "-999", new PartitionKey("-999"));
+                        bool v10Ok = readV10 != null
+                            && readV10.vesselName == "TestVessel-999"
+                            && readV10.imoNumber == 1234567
+                            && readV10.SelectedPrefix == 0
+                            && readV10.builtBy == "V10Builder";
+                        writeSteps.Add(new { step = "V6_V10.Vessel.CreateVesselMainDataAsync.PrefixAndFullWrite", passed = v10Ok });
+                        if (!v10Ok) allPassed = false;
+
+                        // V12: UpdateStatutoryCertificate preserves isExpiryDate
+                        var expectedExpiry = new DateTime(2028, 5, 20);
+                        var certDoc = new ReportStatutoryCertificatesDocument
+                        {
+                            id = "-999",
+                            projectId = -999,
+                            isExpiryDate = expectedExpiry
+                        };
+                        await certsContainer.CreateItemAsync(certDoc, new PartitionKey("-999"));
+                        cleanupList.Add((certsContainer, "-999", new PartitionKey("-999")));
+
+                        await cosmosVesselRepo.UpdateStatutoryCertificate(-999, new Report
+                        {
+                            StatutoryCertificatesIssuedDates = new StatutoryCertificates
+                            {
+                                IEEDate = new DateTime(2025, 6, 1)
+                            }
+                        });
+                        var readCert = await SafeReadAsync<ReportStatutoryCertificatesDocument>(certsContainer, "-999", new PartitionKey("-999"));
+                        bool v12Ok = readCert != null && readCert.isExpiryDate == expectedExpiry && readCert.ieeIssueDate.HasValue;
+                        writeSteps.Add(new { step = "V12.UpdateStatutoryCertificate.PreservesIsExpiryDate", passed = v12Ok });
+                        if (!v12Ok) allPassed = false;
+
+                        // V13: UpdateReportMainDataAsync on missing project throws
+                        bool v13Throws = false;
+                        try
+                        {
+                            await cosmosVesselRepo.UpdateReportMainDataAsync(new Report(), -99888);
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("Insert_VesselDetails has too many arguments specified"))
+                        {
+                            v13Throws = true;
+                        }
+                        writeSteps.Add(new { step = "V13.Vessel.UpdateReportMainDataAsync.MissingProjectThrows", passed = v13Throws });
+                        if (!v13Throws) allPassed = false;
+
+                        // V14: UpdateSurveyAudit date < 1753 swallowed without error
+                        bool v14Res = await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus
+                        {
+                            ClassSurveyDate = new DateTime(1700, 1, 1)
+                        }, -999);
+                        writeSteps.Add(new { step = "V14.UpdateSurveyAudit.Under1753Swallowed", passed = v14Res });
+                        if (!v14Res) allPassed = false;
+
+                        // R-2arg: CreateVesselMainDataAsync 2-argument writes nothing, returns null
+                        var preCountR2 = (await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
+                        var resR2 = await cosmosVesselRepo.CreateVesselMainDataAsync("-998", new Project { Id = -998 });
+                        var postCountR2 = (await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
+                        bool r2WritesNothing = resR2 == null && preCountR2 == postCountR2 && postCountR2 == 0;
+                        writeSteps.Add(new { step = "R2arg.CreateVesselMainDataAsync.WritesNothingAndReturnsNull", passed = r2WritesNothing });
+                        if (!r2WritesNothing) allPassed = false;
+
+                        // B3 & B4: UpdateTask on CAP_ProjectTaskStatus with trimmed assignedTo (B3) and null TaskId (B4)
+                        var ptsDoc = new ProjectTaskStatusDocument
+                        {
+                            id = "-9991",
+                            ID = -9991,
+                            ProjectId = -999,
+                            TaskId = null, // B4: TaskId is null -> skips task lookup, sets task name null
+                            AssignedTo = "John Doe   ", // B3: trimmed to "John Doe"
+                            StatusId = 1
+                        };
+                        await ptsContainer.CreateItemAsync(ptsDoc, new PartitionKey(-999.0));
+                        cleanupList.Add((ptsContainer, "-9991", new PartitionKey(-999.0)));
+
+                        bool b3b4Res = await cosmosTaskRepo.UpdateTask(new SingleTask
+                        {
+                            ID = -9991,
+                            ProjectId = -999,
+                            TaskId = null,
+                            AssignedTo = "John Doe",
+                            StatusId = 2
+                        }, "admin");
+
+                        var readPts = await SafeReadAsync<ProjectTaskStatusDocument>(ptsContainer, "-9991", new PartitionKey(-999.0));
+                        bool b3b4Ok = b3b4Res && readPts != null && readPts.AssignedTo == "John Doe" && readPts.StatusId == 2;
+                        writeSteps.Add(new { step = "B3_B4.Task.UpdateTask.AssignedToTrimmedAndNullTaskId", passed = b3b4Ok });
+                        if (!b3b4Ok) allPassed = false;
+
+                        // E1: UpdateTankSectionRequiredInReportAsync with imo 0 matching "   "
+                        var e1TankGuid = Guid.NewGuid();
+                        var e1TankDoc = new VesselTankMappingDocument
+                        {
+                            id = e1TankGuid.ToString(),
+                            Id = e1TankGuid.ToString(),
+                            ProjectId = -999,
+                            ImoNumber = "   ", // spaces-only -> matches docImo == 0
+                            RequiredInReport = false
+                        };
+                        await tankContainer.CreateItemAsync(e1TankDoc, new PartitionKey(-999.0));
+                        cleanupList.Add((tankContainer, e1TankGuid.ToString(), new PartitionKey(-999.0)));
+
+                        await cosmosExportRepo.UpdateTankSectionRequiredInReportAsync(true, e1TankGuid, 0, "admin");
+                        var readE1Tank = await SafeReadAsync<VesselTankMappingDocument>(tankContainer, e1TankGuid.ToString(), new PartitionKey(-999.0));
+                        bool e1Ok = readE1Tank != null && readE1Tank.RequiredInReport == true;
+                        writeSteps.Add(new { step = "E1.Export.UpdateTankRequiredInReport.Imo0MatchesSpaces", passed = e1Ok });
+                        if (!e1Ok) allPassed = false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    hadException = true;
+                    writeSteps.Add(new { step = "WriteTests.Exception", passed = false, error = ex.Message });
+                    allPassed = false;
+                }
+                finally
+                {
+                    foreach (var (cont, id, pk) in cleanupList)
+                    {
+                        try
+                        {
+                            await cont.DeleteItemAsync<object>(id, pk);
+                        }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        {
+                            // ignore NotFound only
+                        }
+                        catch (Exception ex)
+                        {
+                            writeSteps.Add(new { step = "Cleanup.Error", id, passed = false, error = ex.Message });
+                        }
+                    }
+                }
+
+                allPassed = allPassed && !hadException
+                    && checks.All(c =>
+                    {
+                        var prop = c.GetType().GetProperty("equal") ?? c.GetType().GetProperty("match") ?? c.GetType().GetProperty("allMatch");
+                        if (prop != null)
+                        {
+                            var val = prop.GetValue(c);
+                            if (val is bool b) return b;
+                        }
+                        var errProp = c.GetType().GetProperty("error");
+                        if (errProp != null) return false;
+                        return true;
+                    })
+                    && writeSteps.All(w =>
+                    {
+                        var prop = w.GetType().GetProperty("passed");
+                        if (prop != null)
+                        {
+                            var val = prop.GetValue(w);
+                            if (val is bool b) return b;
+                        }
+                        return false;
+                    });
+
+                return Results.Ok(new
+                {
+                    summary = allPassed ? "ALL PARITY AND WRITE TESTS PASSED" : "ONE OR MORE TESTS FAILED",
+                    allPassed,
+                    hadException,
+                    checksCount = checks.Count,
+                    writeStepsCount = writeSteps.Count,
+                    checks,
+                    writeSteps
+                });
+            }).AllowAnonymous();
         }
     }
 }

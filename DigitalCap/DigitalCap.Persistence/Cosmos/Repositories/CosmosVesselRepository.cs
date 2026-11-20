@@ -8,6 +8,7 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -64,53 +65,53 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             if (data != null)
             {
-                issued.LLLIDate = data.llliIssueDate;
-                expiry.LLLIDate = data.llliExpiryDate;
+                issued.LLLIDate = data.llliIssueDate ?? DateTime.MinValue;
+                expiry.LLLIDate = data.llliExpiryDate ?? DateTime.MinValue;
 
-                issued.SafetyConDate = data.safetyConIssueDate;
-                expiry.SafetyConDate = data.safetyConExpiryDate;
+                issued.SafetyConDate = data.safetyConIssueDate ?? DateTime.MinValue;
+                expiry.SafetyConDate = data.safetyConExpiryDate ?? DateTime.MinValue;
 
-                issued.SafetyRadioDate = data.safetyRadioIssueDate;
-                expiry.SafetyRadioDate = data.safetyRadioExpiryDate;
+                issued.SafetyRadioDate = data.safetyRadioIssueDate ?? DateTime.MinValue;
+                expiry.SafetyRadioDate = data.safetyRadioExpiryDate ?? DateTime.MinValue;
 
-                issued.SafetyEquipmentDate = data.safetyEquipmentIssueDate;
-                expiry.SafetyEquipmentDate = data.safetyEquipmentExpiryDate;
+                issued.SafetyEquipmentDate = data.safetyEquipmentIssueDate ?? DateTime.MinValue;
+                expiry.SafetyEquipmentDate = data.safetyEquipmentExpiryDate ?? DateTime.MinValue;
 
-                issued.IEEDate = data.ieeIssueDate;
-                expiry.IEEDate = data.ieeExpiryDate;
+                issued.IEEDate = data.ieeIssueDate ?? DateTime.MinValue;
+                expiry.IEEDate = data.ieeExpiryDate ?? DateTime.MinValue;
 
-                issued.IOPPDate = data.ioppIssueDate;
-                expiry.IOPPDate = data.ioppExpiryDate;
+                issued.IOPPDate = data.ioppIssueDate ?? DateTime.MinValue;
+                expiry.IOPPDate = data.ioppExpiryDate ?? DateTime.MinValue;
 
-                issued.IAPDate = data.iapIssueDate;
-                expiry.IAPDate = data.iapExpiryDate;
+                issued.IAPDate = data.iapIssueDate ?? DateTime.MinValue;
+                expiry.IAPDate = data.iapExpiryDate ?? DateTime.MinValue;
 
-                issued.IAFSDate = data.iafsIsuueDate;
-                expiry.IAFSDate = data.iafsExpiryDate;
+                issued.IAFSDate = data.iafsIsuueDate ?? DateTime.MinValue;
+                expiry.IAFSDate = data.iafsExpiryDate ?? DateTime.MinValue;
 
-                issued.ISPSDate = data.ispsIssueDate;
-                expiry.ISPSDate = data.ispsExpiryDate;
+                issued.ISPSDate = data.ispsIssueDate ?? DateTime.MinValue;
+                expiry.ISPSDate = data.ispsExpiryDate ?? DateTime.MinValue;
 
-                issued.CargoGearReTestDate = data.cargoGearReTestIssueDate;
-                expiry.CargoGearReTestDate = data.cargoGearReTestExpiryDate;
+                issued.CargoGearReTestDate = data.cargoGearReTestIssueDate ?? DateTime.MinValue;
+                expiry.CargoGearReTestDate = data.cargoGearReTestExpiryDate ?? DateTime.MinValue;
 
-                issued.CargoGearAnnualCertificate = data.cargoGearAnnualIssueCertificate;
-                expiry.CargoGearAnnualCertificate = data.cargoGearAnnualExpiryCertificate;
+                issued.CargoGearAnnualCertificate = data.cargoGearAnnualIssueCertificate ?? DateTime.MinValue;
+                expiry.CargoGearAnnualCertificate = data.cargoGearAnnualExpiryCertificate ?? DateTime.MinValue;
 
-                issued.IBWMDate = data.ibwmIssueDate;
-                expiry.IBWMDate = data.ibwmExpiryDate;
+                issued.IBWMDate = data.ibwmIssueDate ?? DateTime.MinValue;
+                expiry.IBWMDate = data.ibwmExpiryDate ?? DateTime.MinValue;
 
-                issued.ISPPSewageDate = data.isppSewageIssueDate;
-                expiry.ISPPSewageDate = data.isppSewageExpiryDate;
+                issued.ISPPSewageDate = data.isppSewageIssueDate ?? DateTime.MinValue;
+                expiry.ISPPSewageDate = data.isppSewageExpiryDate ?? DateTime.MinValue;
 
-                issued.ISMDate = data.ismIssueDate;
-                expiry.ISMDate = data.ismExpiryDate;
+                issued.ISMDate = data.ismIssueDate ?? DateTime.MinValue;
+                expiry.ISMDate = data.ismExpiryDate ?? DateTime.MinValue;
 
-                issued.MaritimeLabourDate = data.maritimeLabourIssueDate;
-                expiry.MaritimeLabourDate = data.maritimeLabourExpiryDate;
+                issued.MaritimeLabourDate = data.maritimeLabourIssueDate ?? DateTime.MinValue;
+                expiry.MaritimeLabourDate = data.maritimeLabourExpiryDate ?? DateTime.MinValue;
 
-                issued.GasCarrierFitness = data.fitnessGasCertificateIssueDate;
-                expiry.GasCarrierFitness = data.fitnessGasCertificateExpiryDate;
+                issued.GasCarrierFitness = data.fitnessGasCertificateIssueDate ?? DateTime.MinValue;
+                expiry.GasCarrierFitness = data.fitnessGasCertificateExpiryDate ?? DateTime.MinValue;
             }
 
             return new Core.Models.Survey.Certificates
@@ -240,8 +241,20 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         public async Task<bool> UpdateSurveyAudit(Core.Models.Survey.SurveyStatus surveyStatus, int projectId)
         {
             var data = (await GetSurveyStatus(projectId))?.ToList();
-            if (data == null || data.Count == 0)
+            if (data == null)
             {
+                throw new ArgumentNullException(nameof(data));
+            }
+
+            if (data.Count == 0)
+            {
+                if ((surveyStatus.ClassSurveyDate.HasValue && surveyStatus.ClassSurveyDate.Value.Year < 1753) ||
+                    (surveyStatus.DryDockDate.HasValue && surveyStatus.DryDockDate.Value.Year < 1753))
+                {
+                    // SQL datetime overflow (< 1753) is swallowed, writes nothing
+                    return true;
+                }
+
                 try
                 {
                     var doc = new ReportSurveyDetailsDocument
@@ -307,8 +320,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                         specialContinuousHull13 = ResolveDate(surveyStatus.SpecialContinuousHull13, surveyStatusData?.SpecialContinuousHull13),
                         specialContinuousHull14 = ResolveDate(surveyStatus.SpecialContinuousHull14, surveyStatusData?.SpecialContinuousHull14),
                         specialContinuousHull15 = ResolveDate(surveyStatus.SpecialContinuousHull15, surveyStatusData?.SpecialContinuousHull15),
-                        specialHullNo = (surveyStatus.SpecialHullNo != null) ?
-                            (surveyStatus.SpecialHullNo == 0 ? null : surveyStatus.SpecialHullNo)
+                        specialHullNo = (surveyStatus.SpecialHullNo != null)
+                            ? (surveyStatus.SpecialHullNo == 0 ? null : surveyStatus.SpecialHullNo)
                             : (surveyStatusData?.SpecialHullNo == 0 ? null : surveyStatusData?.SpecialHullNo)
                     };
 
@@ -346,130 +359,142 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 if (data == null)
                 {
-                    var doc = new ReportVesselMainDataDocument
-                    {
-                        id = projectId.ToString(),
-                        projectId = projectId,
-                        SelectedPrefix = report.Vessel?.SelectedPrefix != null && int.TryParse(report.Vessel.SelectedPrefix, out var sp) ? sp : 0,
-                        reportNo = report.ReportNo,
-                        reportPort = report.ReportPort,
-                        classNo = report.Vessel?.ClassNo,
-                        builtBy = report.Vessel?.BuiltBy,
-                        vesselName = report.Vessel?.VesselName,
-                        length = report.Vessel != null ? report.Vessel.Length.ToString() : null,
-                        yearBuilt = (report.Vessel != null && report.Vessel.YearBuilt != 0) ? report.Vessel.YearBuilt.ToString() : null,
-                        hullNo = report.Vessel?.HullNo,
-                        vesselID = report.Vessel?.ID,
-                        imoNumber = report.Vessel?.ImoNumber,
-                        vesselType = report.Vessel?.VesselType,
-                        flagName = report.Vessel?.FlagName,
-                        homeport = report.Vessel?.Homeport,
-                        portDate = (report.ReportDate != null && Convert.ToDateTime(report.ReportDate) != DateTime.MinValue) ? report.ReportDate : null,
-                        officalNumber = report.Vessel?.OfficalNumber,
-                        callSign = report.Vessel?.CallSign,
-                        ownerName = report.Vessel?.OwnerName,
-                        breadth = report.Vessel != null ? report.Vessel.Breadth.ToString() : null,
-                        depth = report.Vessel != null ? report.Vessel.DEPTH.ToString() : null,
-                        deadweight = report.Vessel?.DEADWEIGHT,
-                        grossTons = report.Vessel != null ? report.Vessel.GrossTons.ToString() : null,
-                        netTons = report.Vessel != null ? report.Vessel.NetTons.ToString() : null,
-                        actualReportStartDate = (report.Vessel != null && report.Vessel.ActualReportStartDate != DateTime.MinValue) ? report.Vessel.ActualReportStartDate.ToString("yyyy-MM-dd") : null,
-                        previousName = report.Vessel?.PreviousName,
-                        manager = report.Vessel?.Manager,
-                        draft = report.Vessel != null ? report.Vessel.Draft.ToString() : null,
-                        propulsionType = report.Vessel?.PropulsionType,
-                        kw = report.Vessel?.KW,
-                        shaftRPM = report.Vessel != null ? report.Vessel.ShaftRPM.ToString() : null,
-                        propulsionManufacturer = report.Vessel?.PropulsionManufacturer,
-                        gearManufacturer = report.Vessel?.GearManufacturer,
-                        classed = report.Vessel?.Classed,
-                        classNotation = report.Vessel?.ClassNotation,
-                        machinery = report.Vessel?.Machinery,
-                        other = report.Vessel?.Other,
-                        environment = report.Vessel?.Environment,
-                        firstVisitDate = report.Vessel?.FirstVisitDate,
-                        lastVisitDate = report.Vessel?.LastVisitDate
-                    };
+                    // KNOWN SQL BUG (reported to dcap-app team)
+                    throw new InvalidOperationException("Procedure or function Insert_VesselDetails has too many arguments specified.");
+                }
 
-                    await Sp_Insert_VesselDetails(doc);
+                _ = report.Vessel.ClassNo; // Let it throw NullReferenceException if report.Vessel is null (matching SQL)
+
+                int? selPrefix;
+                if (report.Vessel.SelectedPrefix != null)
+                {
+                    if (report.Vessel.SelectedPrefix == "")
+                    {
+                        selPrefix = null;
+                    }
+                    else if (string.IsNullOrWhiteSpace(report.Vessel.SelectedPrefix))
+                    {
+                        selPrefix = 0; // Spaces-only in SQL converts to 0
+                    }
+                    else if (int.TryParse(report.Vessel.SelectedPrefix, out var parsedSp))
+                    {
+                        selPrefix = parsedSp;
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException($"Conversion failed when converting the varchar value '{report.Vessel.SelectedPrefix}' to data type int.");
+                    }
                 }
                 else
                 {
-                    string? selPrefixVal = report.Vessel?.SelectedPrefix != null
-                        ? (report.Vessel.SelectedPrefix == "" ? null : report.Vessel.SelectedPrefix)
-                        : (data.selectedPrefix.ToString() == "" ? null : data.selectedPrefix.ToString());
-                    int? selPrefix = int.TryParse(selPrefixVal, out var parsedSp) ? parsedSp : 0;
-
-                    var doc = new ReportVesselMainDataDocument
-                    {
-                        id = projectId.ToString(),
-                        projectId = projectId,
-                        SelectedPrefix = selPrefix,
-                        reportNo = report.ReportNo != null ? (report.ReportNo == "" ? null : report.ReportNo) : (data.reportNo == "" ? null : data.reportNo),
-                        reportPort = report.ReportPort != null ? (report.ReportPort == "" ? null : report.ReportPort) : (data.reportPort == "" ? null : data.reportPort),
-                        classNo = report.Vessel?.ClassNo != null ? (report.Vessel.ClassNo == "" ? null : report.Vessel.ClassNo) : (data.classNo == "" ? null : data.classNo),
-                        builtBy = report.Vessel?.BuiltBy != null ? (report.Vessel.BuiltBy == "" ? null : report.Vessel.BuiltBy) : (data.builtBy == "" ? null : data.builtBy),
-                        vesselName = report.Vessel?.VesselName != null ? (report.Vessel.VesselName == "" ? null : report.Vessel.VesselName) : (data.vesselName == "" ? null : data.vesselName),
-                        length = (report.Vessel != null && (report.Vessel.Length != 0 || Convert.ToDecimal(report.Vessel.Length) == 0.1m))
-                            ? (Convert.ToDecimal(report.Vessel.Length) == 0.1m ? null : report.Vessel.Length.ToString())
-                            : (data.length == "" ? null : data.length),
-                        yearBuilt = (report.Vessel != null && report.Vessel.YearBuilt != 0)
-                            ? report.Vessel.YearBuilt.ToString()
-                            : data.yearBuilt,
-                        hullNo = report.Vessel?.HullNo != null ? (report.Vessel.HullNo == "" ? null : report.Vessel.HullNo) : data.hullNo,
-                        vesselID = report.Vessel?.ID,
-                        imoNumber = report.Vessel?.ImoNumber,
-                        vesselType = report.Vessel?.VesselType != null ? (report.Vessel.VesselType == "" ? null : report.Vessel.VesselType) : data.vesselType,
-                        flagName = report.Vessel?.FlagName != null ? (report.Vessel.FlagName == "" ? null : report.Vessel.FlagName) : data.flagName,
-                        homeport = report.Vessel?.Homeport != null ? (report.Vessel.Homeport == "" ? null : report.Vessel.Homeport) : data.homeport,
-                        portDate = (report.ReportDate != null && Convert.ToDateTime(report.ReportDate) != DateTime.MinValue)
-                            ? report.ReportDate
-                            : (data.portDate == "" ? null : data.portDate),
-                        officalNumber = report.Vessel?.OfficalNumber != null ? (report.Vessel.OfficalNumber == "" ? null : report.Vessel.OfficalNumber) : (data.officalNumber == "" ? null : data.officalNumber),
-                        callSign = report.Vessel?.CallSign != null ? (report.Vessel.CallSign == "" ? null : report.Vessel.CallSign) : (data.callSign == "" ? null : data.callSign),
-                        previousName = report.Vessel?.PreviousName != null ? (report.Vessel.PreviousName == "" ? null : report.Vessel.PreviousName) : (data.previousName == "" ? null : data.previousName),
-                        ownerName = report.Vessel?.OwnerName != null ? (report.Vessel.OwnerName == "" ? null : report.Vessel.OwnerName) : (data.ownerName == "" ? null : data.ownerName),
-                        manager = report.Vessel?.Manager != null ? (report.Vessel.Manager == "" ? null : report.Vessel.Manager) : (data.manager == "" ? null : data.manager),
-                        breadth = (report.Vessel != null && (report.Vessel.Breadth != 0 || Convert.ToDecimal(report.Vessel.Breadth) == 0.1m))
-                            ? (Convert.ToDecimal(report.Vessel.Breadth) == 0.1m ? null : report.Vessel.Breadth.ToString())
-                            : (data.breadth == "" ? null : data.breadth),
-                        depth = (report.Vessel != null && (report.Vessel.DEPTH != 0 || Convert.ToDecimal(report.Vessel.DEPTH) == 0.1m))
-                            ? (Convert.ToDecimal(report.Vessel.DEPTH) == 0.1m ? null : report.Vessel.DEPTH.ToString())
-                            : (data.depth == "" ? null : data.depth),
-                        draft = (report.Vessel != null && (report.Vessel.Draft != 0 || Convert.ToDecimal(report.Vessel.Draft) == 0.1m))
-                            ? (Convert.ToDecimal(report.Vessel.Draft) == 0.1m ? null : report.Vessel.Draft.ToString())
-                            : (data.draft == "" ? null : data.draft),
-                        deadweight = report.Vessel?.DEADWEIGHT != null
-                            ? (report.Vessel.DEADWEIGHT == "" ? null : report.Vessel.DEADWEIGHT)
-                            : (data.deadweight == "" ? null : data.deadweight),
-                        grossTons = (report.Vessel != null && (report.Vessel.GrossTons != 0 || Convert.ToDecimal(report.Vessel.GrossTons) == 0.1m))
-                            ? (Convert.ToDecimal(report.Vessel.GrossTons) == 0.1m ? null : report.Vessel.GrossTons.ToString())
-                            : (data.grossTons == "" ? null : data.grossTons),
-                        netTons = (report.Vessel != null && (report.Vessel.NetTons != 0 || Convert.ToDecimal(report.Vessel.NetTons) == 0.1m))
-                            ? (Convert.ToDecimal(report.Vessel.NetTons) == 0.1m ? null : report.Vessel.NetTons.ToString())
-                            : (data.netTons == "" ? null : data.netTons),
-                        propulsionType = report.Vessel?.PropulsionType != null ? (report.Vessel.PropulsionType == "" ? null : report.Vessel.PropulsionType) : (data.propulsionType == "" ? null : data.propulsionType),
-                        kw = report.Vessel?.KW != null ? (report.Vessel.KW == "" ? null : report.Vessel.KW) : (data.kw == "" ? null : data.kw),
-                        shaftRPM = (report.Vessel != null && (report.Vessel.ShaftRPM != 0 || Convert.ToDecimal(report.Vessel.ShaftRPM) == 0.1m))
-                            ? (Convert.ToDecimal(report.Vessel.ShaftRPM) == 0.1m ? null : report.Vessel.ShaftRPM.ToString())
-                            : (data.shaftRPM == "" ? null : data.shaftRPM),
-                        propulsionManufacturer = report.Vessel?.PropulsionManufacturer != null ? (report.Vessel.PropulsionManufacturer == "" ? null : report.Vessel.PropulsionManufacturer) : (data.propulsionManufacturer == "" ? null : data.propulsionManufacturer),
-                        gearManufacturer = report.Vessel?.GearManufacturer != null ? (report.Vessel.GearManufacturer == "" ? null : report.Vessel.GearManufacturer) : (data.gearManufacturer == "" ? null : data.gearManufacturer),
-                        classed = report.Vessel?.Classed != null ? (report.Vessel.Classed == "" ? null : report.Vessel.Classed) : (data.classed == "" ? null : data.classed),
-                        classNotation = report.Vessel?.ClassNotation != null ? (report.Vessel.ClassNotation == "" ? null : report.Vessel.ClassNotation) : (data.classNotation == "" ? null : data.classNotation),
-                        machinery = report.Vessel?.Machinery != null ? (report.Vessel.Machinery == "" ? null : report.Vessel.Machinery) : (data.machinery == "" ? null : data.machinery),
-                        other = report.Vessel?.Other != null ? (report.Vessel.Other == "" ? null : report.Vessel.Other) : (data.other == "" ? null : data.other),
-                        environment = report.Vessel?.Environment != null ? (report.Vessel.Environment == "" ? null : report.Vessel.Environment) : (data.environment == "" ? null : data.environment),
-                        actualReportStartDate = (report.Vessel != null && report.Vessel.ActualReportStartDate != DateTime.MinValue)
-                            ? report.Vessel.ActualReportStartDate.ToString("yyyy-MM-dd")
-                            : (data.actualReportStartDate == "" ? null : data.actualReportStartDate),
-                        firstVisitDate = report.Vessel?.FirstVisitDate != null ? (report.Vessel.FirstVisitDate == "" ? null : report.Vessel.FirstVisitDate) : (data.firstVisitDate == "" ? null : data.firstVisitDate),
-                        lastVisitDate = report.Vessel?.LastVisitDate != null ? (report.Vessel.LastVisitDate == "" ? null : report.Vessel.LastVisitDate) : (data.lastVisitDate == "" ? null : data.lastVisitDate)
-                    };
-
-                    await Sp_Update_VesselDetails(doc);
+                    selPrefix = data.selectedPrefix;
                 }
 
+                var rawFirstVisit = report.Vessel.FirstVisitDate != null
+                    ? (report.Vessel.FirstVisitDate == "" ? null : report.Vessel.FirstVisitDate)
+                    : (data.firstVisitDate == null ? null : data.firstVisitDate);
+
+                DateTime lastVisitDate;
+                DateTime firstVisitDate;
+
+                bool isFirstValid = DateTime.TryParseExact(
+                    report?.Vessel?.FirstVisitDate,
+                    "dd-MM-yyyy",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out firstVisitDate) && firstVisitDate.Date != new DateTime(1900, 1, 1);
+
+                bool isLastValid = DateTime.TryParseExact(
+                    data?.lastVisitDate,
+                    "dd-MM-yyyy",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out lastVisitDate) && lastVisitDate.Date != new DateTime(1900, 1, 1);
+
+                string? finalLastVisit;
+                if (isLastValid && isFirstValid && lastVisitDate.Date < firstVisitDate.Date)
+                {
+                    finalLastVisit = null;
+                }
+                else
+                {
+                    finalLastVisit = report.Vessel.LastVisitDate != null
+                        ? (report.Vessel.LastVisitDate == "" ? null : report.Vessel.LastVisitDate)
+                        : (data.lastVisitDate == "" ? null : data.lastVisitDate);
+                }
+
+                string? actualReportStartDate = report.Vessel.ActualReportStartDate != DateTime.MinValue
+                    ? FormatSqlStyle0(report.Vessel.ActualReportStartDate)
+                    : (Convert.ToDateTime(data.actualReportStartDate) == DateTime.MinValue ? null : data.actualReportStartDate);
+
+                string? portDate = report.ReportDate != null
+                    ? (Convert.ToDateTime(report.ReportDate) == DateTime.MinValue ? null : report.ReportDate)
+                    : (Convert.ToDateTime(data.portDate) == DateTime.MinValue ? null : data.portDate);
+
+                var doc = new ReportVesselMainDataDocument
+                {
+                    id = projectId.ToString(),
+                    projectId = projectId,
+                    SelectedPrefix = selPrefix,
+                    reportNo = report.ReportNo != null ? (report.ReportNo == "" ? null : report.ReportNo) : (data.reportNo == "" ? null : data.reportNo),
+                    reportPort = report.ReportPort != null ? (report.ReportPort == "" ? null : report.ReportPort) : (data.reportPort == "" ? null : data.reportPort),
+                    classNo = report.Vessel.ClassNo != null ? (report.Vessel.ClassNo == "" ? null : report.Vessel.ClassNo) : (data.classNo == "" ? null : data.classNo),
+                    builtBy = report.Vessel.BuiltBy != null ? (report.Vessel.BuiltBy == "" ? null : report.Vessel.BuiltBy) : (data.builtBy == "" ? null : data.builtBy),
+                    vesselName = report.Vessel.VesselName != null ? (report.Vessel.VesselName == "" ? null : report.Vessel.VesselName) : (data.vesselName == "" ? null : data.vesselName),
+                    length = (report.Vessel.Length != 0 || Convert.ToDecimal(report.Vessel.Length) == 0.1m)
+                        ? (Convert.ToDecimal(report.Vessel.Length) == 0.1m ? null : FormatReal(report.Vessel.Length))
+                        : (data.length == "" ? null : data.length),
+                    yearBuilt = report.Vessel.YearBuilt != 0
+                        ? report.Vessel.YearBuilt.ToString()
+                        : data.yearBuilt,
+                    hullNo = report.Vessel.HullNo != null ? (report.Vessel.HullNo == "" ? null : report.Vessel.HullNo) : data.hullNo,
+                    vesselID = report.Vessel.ID,
+                    imoNumber = report.Vessel.ImoNumber,
+                    vesselType = report.Vessel.VesselType != null ? (report.Vessel.VesselType == "" ? null : report.Vessel.VesselType) : data.vesselType,
+                    flagName = report.Vessel.FlagName != null ? (report.Vessel.FlagName == "" ? null : report.Vessel.FlagName) : data.flagName,
+                    homeport = report.Vessel.Homeport != null ? (report.Vessel.Homeport == "" ? null : report.Vessel.Homeport) : data.homeport,
+                    portDate = portDate,
+                    officalNumber = report.Vessel.OfficalNumber != null ? (report.Vessel.OfficalNumber == "" ? null : report.Vessel.OfficalNumber) : (data.officalNumber == null ? null : data.officalNumber),
+                    callSign = report.Vessel.CallSign != null ? (report.Vessel.CallSign == "" ? null : report.Vessel.CallSign) : (data.callSign == null ? null : data.callSign),
+                    previousName = report.Vessel.PreviousName != null ? (report.Vessel.PreviousName == "" ? null : report.Vessel.PreviousName) : (data.previousName == null ? null : data.previousName),
+                    ownerName = report.Vessel.OwnerName != null ? (report.Vessel.OwnerName == "" ? null : report.Vessel.OwnerName) : (data.ownerName == null ? null : data.ownerName),
+                    manager = report.Vessel.Manager != null ? (report.Vessel.Manager == "" ? null : report.Vessel.Manager) : (data.manager == null ? null : data.manager),
+                    breadth = (report.Vessel.Breadth != 0 || Convert.ToDecimal(report.Vessel.Breadth) == 0.1m)
+                        ? (Convert.ToDecimal(report.Vessel.Breadth) == 0.1m ? null : FormatReal(report.Vessel.Breadth))
+                        : (data.breadth == "" ? null : data.breadth),
+                    depth = (report.Vessel.DEPTH != 0 || Convert.ToDecimal(report.Vessel.DEPTH) == 0.1m)
+                        ? (Convert.ToDecimal(report.Vessel.DEPTH) == 0.1m ? null : FormatReal(report.Vessel.DEPTH))
+                        : (data.depth == "" ? null : data.depth),
+                    draft = (report.Vessel.Draft != 0 || Convert.ToDecimal(report.Vessel.Draft) == 0.1m)
+                        ? (Convert.ToDecimal(report.Vessel.Draft) == 0.1m ? null : FormatReal(report.Vessel.Draft))
+                        : (data.draft == "" ? null : data.draft),
+                    deadweight = report.Vessel.DEADWEIGHT != null
+                        ? (report.Vessel.DEADWEIGHT == "" ? null : report.Vessel.DEADWEIGHT)
+                        : (data.deadweight == "" ? null : data.deadweight),
+                    grossTons = (report.Vessel.GrossTons != 0 || Convert.ToDecimal(report.Vessel.GrossTons) == 0.1m)
+                        ? (Convert.ToDecimal(report.Vessel.GrossTons) == 0.1m ? null : FormatReal(report.Vessel.GrossTons))
+                        : (data.grossTons == "" ? null : data.grossTons),
+                    netTons = (report.Vessel.NetTons != 0 || Convert.ToDecimal(report.Vessel.NetTons) == 0.1m)
+                        ? (Convert.ToDecimal(report.Vessel.NetTons) == 0.1m ? null : FormatReal(report.Vessel.NetTons))
+                        : (data.netTons == "" ? null : data.netTons),
+                    propulsionType = report.Vessel.PropulsionType != null ? (report.Vessel.PropulsionType == "" ? null : report.Vessel.PropulsionType) : (data.propulsionType == null ? null : data.propulsionType),
+                    kw = report.Vessel.KW != null ? (report.Vessel.KW == "" ? null : report.Vessel.KW) : (data.kw == null ? null : data.kw),
+                    shaftRPM = (report.Vessel.ShaftRPM != 0 || Convert.ToDecimal(report.Vessel.ShaftRPM) == 0.1m)
+                        ? (Convert.ToDecimal(report.Vessel.ShaftRPM) == 0.1m ? null : FormatReal(report.Vessel.ShaftRPM))
+                        : (data.shaftRPM == "" ? null : data.shaftRPM),
+                    propulsionManufacturer = report.Vessel.PropulsionManufacturer != null ? (report.Vessel.PropulsionManufacturer == "" ? null : report.Vessel.PropulsionManufacturer) : (data.propulsionManufacturer == null ? null : data.propulsionManufacturer),
+                    gearManufacturer = report.Vessel.GearManufacturer != null ? (report.Vessel.GearManufacturer == "" ? null : report.Vessel.GearManufacturer) : (data.gearManufacturer == null ? null : data.gearManufacturer),
+                    classed = report.Vessel.Classed != null ? (report.Vessel.Classed == "" ? null : report.Vessel.Classed) : (data.classed == null ? null : data.classed),
+                    classNotation = report.Vessel.ClassNotation != null ? (report.Vessel.ClassNotation == "" ? null : report.Vessel.ClassNotation) : (data.classNotation == null ? null : data.classNotation),
+                    machinery = report.Vessel.Machinery != null ? (report.Vessel.Machinery == "" ? null : report.Vessel.Machinery) : (data.machinery == null ? null : data.machinery),
+                    other = report.Vessel.Other != null ? (report.Vessel.Other == "" ? null : report.Vessel.Other) : (data.other == null ? null : data.other),
+                    environment = report.Vessel.Environment != null ? (report.Vessel.Environment == "" ? null : report.Vessel.Environment) : (data.environment == null ? null : data.environment),
+                    actualReportStartDate = actualReportStartDate,
+                    firstVisitDate = rawFirstVisit,
+                    lastVisitDate = finalLastVisit
+                };
+
+                await Sp_Update_VesselDetails(doc);
                 Commit();
                 return true;
             }
@@ -489,9 +514,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     vessel = await _freedomApiRepository.GetVessel(classNumber);
                 }
 
-                await Sp_Create_VesselMainData();
-                Commit();
-                return classNumber;
+                // In SQL, calls non-existent procedure Create_VesselMainData -> catch returns null, writes nothing
+                return null!;
             }
             catch
             {
@@ -503,7 +527,49 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             try
             {
-                await Sp_Create_VesselMainData();
+                if (vessel == null)
+                {
+                    // SQL VesselRepository line 39: write only when vessel != null
+                    return;
+                }
+
+                var firstVisit = project.SurveyFirstVisit != null && project.SurveyFirstVisit != DateTime.MinValue
+                    ? project.SurveyFirstVisit.Value.ToString("dd-MM-yyy")
+                    : DateTime.Now.ToString("dd-MM-yyy");
+                var lastVisit = project.SurveyLastVisit != null && project.SurveyLastVisit != DateTime.MinValue
+                    ? project.SurveyLastVisit.Value.ToString("dd-MM-yyy")
+                    : DateTime.Now.ToString("dd-MM-yyy");
+
+                var doc = new ReportVesselMainDataDocument
+                {
+                    id = project.Id.ToString(),
+                    projectId = project.Id,
+                    classNo = project.AbsClassID,
+                    builtBy = project.Builder,
+                    vesselName = project.VesselName,
+                    length = project.LengthOverall?.ToString(CultureInfo.InvariantCulture),
+                    yearBuilt = project.YearBuilt.HasValue ? project.YearBuilt.Value.ToString() : null,
+                    hullNo = project.HullNumber,
+                    imoNumber = project.IMO,
+                    classed = project.ClassSociety != null && project.ClassSociety.Length > 0 ? project.ClassSociety[0] : null,
+                    firstVisitDate = firstVisit,
+                    lastVisitDate = lastVisit,
+                    SelectedPrefix = 0,
+                    vesselID = vessel.ImoNumber != null && int.TryParse(vessel.ImoNumber, out var vImo) ? vImo : (int?)null,
+                    vesselType = vessel.VesselType,
+                    flagName = vessel.FlagName,
+                    homeport = vessel.PortRegistry,
+                    officalNumber = vessel.OfficialNumber,
+                    callSign = vessel.CallSign,
+                    ownerName = vessel.RegisteredOwner?.Name,
+                    breadth = FormatReal(vessel.BreadthMolded?.Value),
+                    depth = FormatReal(vessel.DepthMolded?.Value),
+                    deadweight = vessel.DesignDeadWeight?.Value,
+                    netTons = FormatReal(vessel.NetTonnage?.Value),
+                    classNotation = vessel.ClassNotation
+                };
+
+                await Sp_Insert_VesselDetails(doc);
                 Commit();
             }
             catch
@@ -513,6 +579,70 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         }
 
         #region Stored Procedure Helpers
+
+        internal static string FormatSqlStyle0(DateTime d)
+        {
+            int hour12 = d.Hour % 12;
+            if (hour12 == 0) hour12 = 12;
+            string ampm = d.Hour >= 12 ? "PM" : "AM";
+            return string.Format(CultureInfo.InvariantCulture, "{0} {1,2} {2:D4} {3,2}:{4:D2}{5}",
+                d.ToString("MMM", CultureInfo.InvariantCulture),
+                d.Day,
+                d.Year,
+                hour12,
+                d.Minute,
+                ampm);
+        }
+
+        internal static string? FormatReal(object? val)
+        {
+            if (val == null) return null;
+            float f;
+            if (val is float fl)
+            {
+                f = fl;
+            }
+            else if (val is double dbl)
+            {
+                f = (float)dbl;
+            }
+            else if (val is decimal dec)
+            {
+                f = (float)dec;
+            }
+            else if (val is int i)
+            {
+                f = (float)i;
+            }
+            else if (val is long l)
+            {
+                f = (float)l;
+            }
+            else if (float.TryParse(Convert.ToString(val, CultureInfo.InvariantCulture), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+            {
+                f = parsed;
+            }
+            else
+            {
+                return Convert.ToString(val, CultureInfo.InvariantCulture);
+            }
+
+            if (f == 0f) return "0";
+
+            string g6 = f.ToString("G6", CultureInfo.InvariantCulture);
+            int eIndex = g6.IndexOfAny(new[] { 'e', 'E' });
+            if (eIndex >= 0)
+            {
+                string mantissa = g6.Substring(0, eIndex);
+                string expStr = g6.Substring(eIndex + 1);
+                if (int.TryParse(expStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var exp))
+                {
+                    return mantissa + "e" + (exp >= 0 ? "+" : "-") + Math.Abs(exp).ToString("D3", CultureInfo.InvariantCulture);
+                }
+            }
+
+            return g6;
+        }
 
         /// <summary>
         /// Replaces [dbo].[GetSurveyStatus].
@@ -527,6 +657,10 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 if (resp.Resource != null)
                 {
                     var d = resp.Resource;
+                    if (d.imoNum != null)
+                    {
+                        throw new InvalidCastException("Error parsing column 22 (imoNum=... - DateTime to Int32)");
+                    }
                     return new List<SurveyStatus>
                     {
                         new SurveyStatus
@@ -627,6 +761,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var existing = await _certContainer.ReadItemAsync<ReportStatutoryCertificatesDocument>(idStr, pk);
                 if (existing.Resource != null)
                 {
+                    doc.isExpiryDate = existing.Resource.isExpiryDate;
                     await _certContainer.ReplaceItemAsync(doc, idStr, pk);
                 }
             }
@@ -638,15 +773,11 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         /// <summary>
         /// Replaces [dbo].[Insert_SurveyDetails].
-        /// Key is projectId; duplicate throws 409. specialHullNo defaults to 0 if not given.
+        /// Key is projectId; duplicate throws 409.
         /// </summary>
         private async Task Sp_Insert_SurveyDetails(ReportSurveyDetailsDocument doc)
         {
             doc.id = doc.projectId.ToString();
-            if (!doc.specialHullNo.HasValue)
-            {
-                doc.specialHullNo = 0;
-            }
             await _surveyContainer.CreateItemAsync(doc, new PartitionKey(doc.id));
         }
 
@@ -681,27 +812,24 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         /// </summary>
         private async Task<Core.Models.Vessel?> Sp_Read_VesselDetails_ByIMONumber(string imoNumber)
         {
-            if (string.IsNullOrWhiteSpace(imoNumber))
+            if (imoNumber == null)
                 return null;
 
-            QueryDefinition query;
-            if (int.TryParse(imoNumber.Trim(), out var parsedImo))
-            {
-                query = new QueryDefinition("SELECT * FROM c WHERE c.IMONum = @imo").WithParameter("@imo", parsedImo);
-            }
-            else
-            {
-                query = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(c.IMONum, @imo, true)").WithParameter("@imo", imoNumber.Trim());
-            }
+            var cut = imoNumber.Length > 7 ? imoNumber.Substring(0, 7) : imoNumber;
+            var p = cut.TrimEnd(' ');
+            var query = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(RTRIM(c.IMONum), @p, true)").WithParameter("@p", p);
 
             using var feed = _vesselContainer.GetItemQueryIterator<VesselDocument>(query);
-            if (feed.HasMoreResults)
+            while (feed.HasMoreResults)
             {
                 var resp = await feed.ReadNextAsync();
-                var doc = resp.FirstOrDefault();
-                if (doc != null)
+                foreach (var doc in resp)
                 {
-                    return MapToCoreVessel(doc);
+                    var docImo = doc.IMONum?.TrimEnd(' ');
+                    if (string.Equals(docImo, p, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return MapToCoreVessel(doc);
+                    }
                 }
             }
 
@@ -778,44 +906,44 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             return new ReportVesselMainData
             {
                 projectId = d.projectId,
-                reportNo = d.reportNo ?? string.Empty,
-                portDate = d.portDate ?? string.Empty,
-                actualReportStartDate = d.actualReportStartDate ?? string.Empty,
-                vesselName = d.vesselName ?? string.Empty,
+                reportNo = d.reportNo!,
+                portDate = d.portDate!,
+                actualReportStartDate = d.actualReportStartDate!,
+                vesselName = d.vesselName!,
                 vesselID = d.vesselID ?? 0,
                 imoNumber = d.imoNumber ?? 0,
-                vesselType = d.vesselType ?? string.Empty,
-                yearBuilt = d.yearBuilt ?? string.Empty,
-                builtBy = d.builtBy ?? string.Empty,
-                hullNo = d.hullNo ?? string.Empty,
-                flagName = d.flagName ?? string.Empty,
-                homeport = d.homeport ?? string.Empty,
-                officalNumber = d.officalNumber ?? string.Empty,
-                callSign = d.callSign ?? string.Empty,
-                previousName = d.previousName ?? string.Empty,
-                ownerName = d.ownerName ?? string.Empty,
-                manager = d.manager ?? string.Empty,
-                length = d.length ?? string.Empty,
-                breadth = d.breadth ?? string.Empty,
-                depth = d.depth ?? string.Empty,
-                draft = d.draft ?? string.Empty,
-                deadweight = d.deadweight ?? string.Empty,
-                grossTons = d.grossTons ?? string.Empty,
-                netTons = d.netTons ?? string.Empty,
-                propulsionType = d.propulsionType ?? string.Empty,
-                kw = d.kw ?? string.Empty,
-                shaftRPM = d.shaftRPM ?? string.Empty,
-                propulsionManufacturer = d.propulsionManufacturer ?? string.Empty,
-                gearManufacturer = d.gearManufacturer ?? string.Empty,
-                classed = d.classed ?? string.Empty,
-                classNo = d.classNo ?? string.Empty,
-                classNotation = d.classNotation ?? string.Empty,
-                machinery = d.machinery ?? string.Empty,
-                other = d.other ?? string.Empty,
-                environment = d.environment ?? string.Empty,
-                reportPort = d.reportPort ?? string.Empty,
-                firstVisitDate = d.firstVisitDate ?? string.Empty,
-                lastVisitDate = d.lastVisitDate ?? string.Empty,
+                vesselType = d.vesselType!,
+                yearBuilt = d.yearBuilt!,
+                builtBy = d.builtBy!,
+                hullNo = d.hullNo!,
+                flagName = d.flagName!,
+                homeport = d.homeport!,
+                officalNumber = d.officalNumber!,
+                callSign = d.callSign!,
+                previousName = d.previousName!,
+                ownerName = d.ownerName!,
+                manager = d.manager!,
+                length = d.length!,
+                breadth = d.breadth!,
+                depth = d.depth!,
+                draft = d.draft!,
+                deadweight = d.deadweight!,
+                grossTons = d.grossTons!,
+                netTons = d.netTons!,
+                propulsionType = d.propulsionType!,
+                kw = d.kw!,
+                shaftRPM = d.shaftRPM!,
+                propulsionManufacturer = d.propulsionManufacturer!,
+                gearManufacturer = d.gearManufacturer!,
+                classed = d.classed!,
+                classNo = d.classNo!,
+                classNotation = d.classNotation!,
+                machinery = d.machinery!,
+                other = d.other!,
+                environment = d.environment!,
+                reportPort = d.reportPort!,
+                firstVisitDate = d.firstVisitDate!,
+                lastVisitDate = d.lastVisitDate!,
                 selectedPrefix = d.SelectedPrefix ?? 0
             };
         }
@@ -825,55 +953,55 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             return new Core.Models.Vessel
             {
                 Vessel_ID = d.Vessel_ID,
-                Source = d.Source ?? string.Empty,
+                Source = d.Source!,
                 Beam = d.Beam ?? 0,
                 Breadth = d.Breadth ?? 0,
                 ContractDate = d.ContractDate ?? default,
                 Depth = d.Depth ?? 0,
                 Draft = d.Draft ?? 0,
-                HullNum = d.HullNum ?? string.Empty,
-                IMONum = d.IMONum ?? 0,
+                HullNum = d.HullNum!,
+                IMONum = int.TryParse(d.IMONum, out var parsedImo) ? parsedImo : 0,
                 Length = d.Length ?? 0,
-                MarketSegment = d.MarketSegment ?? string.Empty,
-                VesselName = d.VesselName ?? string.Empty,
-                MarketSubSegment = d.MarketSubSegment ?? string.Empty,
-                CallSign = d.CallSign ?? string.Empty,
+                MarketSegment = d.MarketSegment!,
+                VesselName = d.VesselName!,
+                MarketSubSegment = d.MarketSubSegment!,
+                CallSign = d.CallSign!,
                 NetTonnage = d.NetTonnage,
-                ClassNotation = d.ClassNotation ?? string.Empty,
-                ShipTypeGrouping = d.ShipTypeGrouping ?? string.Empty,
-                Statcode5 = d.Statcode5 ?? string.Empty,
+                ClassNotation = d.ClassNotation!,
+                ShipTypeGrouping = d.ShipTypeGrouping!,
+                Statcode5 = d.Statcode5!,
                 Liquid = d.Liquid ?? 0,
-                RegisteredOwner = d.RegisteredOwner ?? string.Empty,
-                ProjectName = d.ProjectName ?? string.Empty,
-                Manager = d.Manager ?? string.Empty,
-                Operator = d.Operator ?? string.Empty,
-                Technical_Manager = d.Technical_Manager ?? string.Empty,
+                RegisteredOwner = d.RegisteredOwner!,
+                ProjectName = d.ProjectName!,
+                Manager = d.Manager!,
+                Operator = d.Operator!,
+                Technical_Manager = d.Technical_Manager!,
                 Registered_Owner_ID = d.Registered_Owner_ID ?? 0,
                 Manager_ID = d.Manager_ID ?? 0,
                 Operator_ID = d.Operator_ID ?? 0,
                 Technical_Manager_ID = d.Technical_Manager_ID ?? 0,
                 BuildDate = d.BuildDate,
-                Builder = d.Builder ?? string.Empty,
-                BuilderName = d.BuilderName ?? string.Empty,
+                Builder = d.Builder!,
+                BuilderName = d.BuilderName!,
                 BuilderNum = d.BuilderNum ?? 0,
-                ClassNum = d.ClassNum ?? string.Empty,
+                ClassNum = d.ClassNum!,
                 ClassedDate = d.ClassedDate ?? default,
-                Country = d.Country ?? string.Empty,
+                Country = d.Country!,
                 DeliveryDate = d.DeliveryDate ?? default,
-                FlagName = d.FlagName ?? string.Empty,
+                FlagName = d.FlagName!,
                 KeelLayingDate = d.KeelLayingDate ?? default,
                 LaunchingDate = d.LaunchingDate ?? default,
-                OwnerCountry = d.OwnerCountry ?? string.Empty,
+                OwnerCountry = d.OwnerCountry!,
                 OwnerID = d.OwnerID ?? 0,
-                OwnerName = d.OwnerName ?? string.Empty,
-                VesselDescription = d.VesselDescription ?? string.Empty,
-                CommercialCategory = d.CommercialCategory ?? string.Empty,
-                ClassedBy = d.ClassedBy ?? string.Empty,
-                ClassedBy2 = d.ClassedBy2 ?? string.Empty,
-                SubStatus = d.SubStatus ?? string.Empty,
+                OwnerName = d.OwnerName!,
+                VesselDescription = d.VesselDescription!,
+                CommercialCategory = d.CommercialCategory!,
+                ClassedBy = d.ClassedBy!,
+                ClassedBy2 = d.ClassedBy2!,
+                SubStatus = d.SubStatus!,
                 DWT = d.DWT,
                 GT = d.GT,
-                VesselType = d.VesselType ?? string.Empty
+                VesselType = d.VesselType!
             };
         }
 

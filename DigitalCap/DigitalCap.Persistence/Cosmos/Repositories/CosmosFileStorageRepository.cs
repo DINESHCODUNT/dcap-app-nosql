@@ -110,6 +110,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task<ProjectFile> SaveProjectFile(ProjectFile file, string storageKey, string currentUser)
         {
+            if (file == null) throw new ArgumentNullException(nameof(file));
+            if (file.Name == null || file.Extension == null || file.MimeType == null || storageKey == null)
+            {
+                var nullCol = file.Name == null ? "Name" : file.Extension == null ? "Extension" : file.MimeType == null ? "MimeType" : "StorageKey";
+                throw new InvalidOperationException($"Error saving project file: Cannot insert the value NULL into column '{nullCol}', table 'CAP.Files'; column does not allow nulls. INSERT fails.");
+            }
+
             try
             {
                 file.StorageKey = storageKey;
@@ -160,6 +167,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task<ProjectFile> SaveTaskFile(ProjectFile file, string storageKey, int taskId, string currentUser)
         {
+            if (file == null) throw new ArgumentNullException(nameof(file));
+            if (file.Name == null || file.Extension == null || file.MimeType == null || storageKey == null)
+            {
+                var nullCol = file.Name == null ? "Name" : file.Extension == null ? "Extension" : file.MimeType == null ? "MimeType" : "StorageKey";
+                throw new InvalidOperationException($"Error saving task file: Cannot insert the value NULL into column '{nullCol}', table 'CAP.Files'; column does not allow nulls. INSERT fails.");
+            }
+
             try
             {
                 file.StorageKey = storageKey;
@@ -251,10 +265,28 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task UpdateFileMetadata(int id, FileDataType dataType, string name, bool availableToClient, string currentUser)
         {
-            var file = await GetFile<ProjectFile>(id);
-            if (file == null)
+            var idStr = id.ToString();
+            var pk = new PartitionKey(idStr);
+
+            FileDocument? doc = null;
+            try
+            {
+                var docResponse = await Container.ReadItemAsync<FileDocument>(idStr, pk);
+                doc = docResponse.Resource;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                doc = null;
+            }
+
+            if (doc == null)
             {
                 throw new ApplicationException($"Could not find file (id: {id})");
+            }
+
+            if (name == null)
+            {
+                throw new InvalidOperationException($"Error updating file metadata for ID {id}: Cannot insert the value NULL into column 'Name', table 'CAP.Files'; column does not allow nulls. UPDATE fails.");
             }
 
             try
@@ -263,25 +295,16 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 var actText = "Updated file " + name;
                 if (actText.Length > 500) actText = actText[..500];
 
-                // StorageKey: column is 50, parameter is 150. A value longer than 50 makes SQL UPDATE fail,
-                // but statement error continues the SP, so activity is still written, then caller gets truncation error.
-                if (file.StorageKey != null && file.StorageKey.Length > 50)
+                if (doc.StorageKey != null && doc.StorageKey.Length > 50)
                 {
-                    await _activityWriter.CreateActivityAsync(file.ProjectId, actText, user);
                     throw new InvalidOperationException($"Error updating file metadata for ID {id}: String or binary data would be truncated.\r\nThe statement has been terminated.");
                 }
 
                 var cutName = name != null && name.Length > 500 ? name[..500] : name;
-                var cutExt = file.Extension != null && file.Extension.Length > 25 ? file.Extension[..25] : file.Extension;
-                var cutMime = file.MimeType != null && file.MimeType.Length > 50 ? file.MimeType[..50] : file.MimeType;
-                var cutStorage = file.StorageKey != null && file.StorageKey.Length > 50 ? file.StorageKey[..50] : file.StorageKey;
+                var cutExt = doc.Extension != null && doc.Extension.Length > 25 ? doc.Extension[..25] : doc.Extension;
+                var cutMime = doc.MimeType != null && doc.MimeType.Length > 50 ? doc.MimeType[..50] : doc.MimeType;
+                var cutStorage = doc.StorageKey != null && doc.StorageKey.Length > 50 ? doc.StorageKey[..50] : doc.StorageKey;
                 var cutLastModBy = user.Length > 150 ? user[..150] : user;
-
-                var idStr = id.ToString();
-                var pk = new PartitionKey(idStr);
-
-                var docResponse = await Container.ReadItemAsync<FileDocument>(idStr, pk);
-                var doc = docResponse.Resource;
 
                 doc.DataType = (int)dataType;
                 doc.Name = cutName;
@@ -293,7 +316,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 // Note: LastModifiedDate is NOT changed in SQL CAP.Update_File
 
                 await ReplaceAsync(doc, idStr, pk);
-                await _activityWriter.CreateActivityAsync(file.ProjectId, actText, user);
+                await _activityWriter.CreateActivityAsync(doc.Projectid, actText, user);
             }
             catch (InvalidOperationException)
             {

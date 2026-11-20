@@ -183,7 +183,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                                 CreateDttm = a.CreateDttm ?? default(DateTime),
                                 PIDNumber = p.PIDNumberInt ?? 0,
                                 ProjectId = p.EffectiveId,
-                                VesselName = p.VesselName ?? string.Empty
+                                VesselName = p.VesselName!
                             });
                         }
                         // If project not found, row is dropped (INNER JOIN in view)
