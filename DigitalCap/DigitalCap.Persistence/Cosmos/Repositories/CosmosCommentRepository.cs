@@ -57,10 +57,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             if (comment == null || userId == null)
             {
-                var userName = await ResolveUserNameAsync(userId);
-                await _activityWriter.CreateActivityAsync(projectId, null, userName);
+                // SQL Create_Comment: the INSERT fails (NOT NULL), but the SP has no transaction/TRY,
+                // so CAP.Create_Activity still runs (Activity = @Comment, CreatedBy = looked-up user name),
+                // then the error reaches the caller.
+                var failText = comment == null ? null : (comment.Length > 4000 ? comment[..4000] : comment);
+                var failUser = await ResolveUserNameAsync(userId);
+                await _activityWriter.CreateActivityAsync(projectId, failText, failUser);
                 var nullCol = comment == null ? "Comment" : "CreatedBy";
-                throw new InvalidOperationException($"Cannot insert the value NULL into column '{nullCol}', table 'CAP.Comments'; column does not allow nulls. INSERT fails.");
+                throw new InvalidOperationException($"Cannot insert the value NULL into column '{nullCol}', table 'CAP.Comments'; column does not allow nulls. INSERT fails.\r\nThe statement has been terminated.");
             }
 
             var cutComment = comment.Length > 4000 ? comment[..4000] : comment;
@@ -104,9 +108,10 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             {
                 if (comment == null)
                 {
-                    var userName = await ResolveUserNameAsync(user);
-                    await _activityWriter.CreateActivityAsync(projectId, null, userName);
-                    throw new InvalidOperationException("Cannot insert the value NULL into column 'Comment', table 'CAP.Comments'; column does not allow nulls. UPDATE fails.");
+                    // SQL Update_Comment: the UPDATE fails (NOT NULL), CAP.Create_Activity still runs (Activity = NULL), then the error reaches the caller.
+                    var failUser = await ResolveUserNameAsync(user);
+                    await _activityWriter.CreateActivityAsync(projectId, null, failUser);
+                    throw new InvalidOperationException("Cannot insert the value NULL into column 'Comment', table 'CAP.Comments'; column does not allow nulls. UPDATE fails.\r\nThe statement has been terminated.");
                 }
 
                 var doc = items[0];

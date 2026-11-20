@@ -110,11 +110,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task<ProjectFile> SaveProjectFile(ProjectFile file, string storageKey, string currentUser)
         {
-            if (file == null) throw new ArgumentNullException(nameof(file));
+            if (file == null)
+            {
+                throw new InvalidOperationException("Error saving project file: Object reference not set to an instance of an object.", new NullReferenceException("Object reference not set to an instance of an object."));
+            }
             if (file.Name == null || file.Extension == null || file.MimeType == null || storageKey == null)
             {
                 var nullCol = file.Name == null ? "Name" : file.Extension == null ? "Extension" : file.MimeType == null ? "MimeType" : "StorageKey";
-                throw new InvalidOperationException($"Error saving project file: Cannot insert the value NULL into column '{nullCol}', table 'CAP.Files'; column does not allow nulls. INSERT fails.");
+                throw new InvalidOperationException($"Error saving project file: Cannot insert the value NULL into column '{nullCol}', table 'CAP.Files'; column does not allow nulls. INSERT fails.\r\nThe statement has been terminated.");
             }
 
             try
@@ -167,11 +170,14 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         public async Task<ProjectFile> SaveTaskFile(ProjectFile file, string storageKey, int taskId, string currentUser)
         {
-            if (file == null) throw new ArgumentNullException(nameof(file));
+            if (file == null)
+            {
+                throw new InvalidOperationException("Error saving task file: Object reference not set to an instance of an object.", new NullReferenceException("Object reference not set to an instance of an object."));
+            }
             if (file.Name == null || file.Extension == null || file.MimeType == null || storageKey == null)
             {
                 var nullCol = file.Name == null ? "Name" : file.Extension == null ? "Extension" : file.MimeType == null ? "MimeType" : "StorageKey";
-                throw new InvalidOperationException($"Error saving task file: Cannot insert the value NULL into column '{nullCol}', table 'CAP.Files'; column does not allow nulls. INSERT fails.");
+                throw new InvalidOperationException($"Error saving task file: Cannot insert the value NULL into column '{nullCol}', table 'CAP.Files'; column does not allow nulls. INSERT fails.\r\nThe statement has been terminated.");
             }
 
             try

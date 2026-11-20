@@ -289,7 +289,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             {
                 return null!;
             }
-            if (!Guid.TryParse(id, out var g))
+            if (!Guid.TryParseExact(id, "D", out var g) && !Guid.TryParseExact(id, "B", out g))
             {
                 throw new InvalidOperationException("Conversion failed when converting from a character string to uniqueidentifier.");
             }
@@ -332,6 +332,15 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             }
 
             var idStr = rolepermission.Id.ToString("D").ToLowerInvariant();
+            var query = new QueryDefinition("SELECT * FROM c WHERE STRINGEQUALS(c.Id, @id, true)")
+                .WithParameter("@id", idStr);
+
+            var matches = await QueryAsync(query);
+            if (matches.Count == 0)
+            {
+                return false;
+            }
+
             var patchOperations = new List<PatchOperation>
             {
                 PatchOperation.Set("/PermissionId", rolepermission.PermissionId.ToString("D").ToLowerInvariant()),
@@ -341,8 +350,17 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 PatchOperation.Set("/IsDeleted", rolepermission.IsDeleted)
             };
 
-            var patched = await PatchAsync(idStr, new PartitionKey(idStr), patchOperations);
-            return patched != null;
+            int updatedCount = 0;
+            foreach (var doc in matches)
+            {
+                var patched = await PatchAsync(doc.id, new PartitionKey(doc.id), patchOperations);
+                if (patched != null)
+                {
+                    updatedCount++;
+                }
+            }
+
+            return updatedCount > 0;
         }
 
         /// <summary>
@@ -477,7 +495,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             {
                 return new List<UserRolePermissionViewModel>();
             }
-            if (!Guid.TryParse(id, out var roleGuid))
+            if (!Guid.TryParseExact(id, "D", out var roleGuid) && !Guid.TryParseExact(id, "B", out roleGuid))
             {
                 throw new InvalidOperationException("Conversion failed when converting from a character string to uniqueidentifier.");
             }

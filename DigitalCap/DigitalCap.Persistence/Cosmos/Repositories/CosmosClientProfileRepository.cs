@@ -76,11 +76,11 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             var op = isInsert ? "INSERT" : "UPDATE";
             if (client.CompanyName == null)
             {
-                throw new InvalidOperationException($"Cannot insert the value NULL into column 'CompanyName', table 'CAP.Clients'; column does not allow nulls. {op} fails.");
+                throw new InvalidOperationException($"Cannot insert the value NULL into column 'CompanyName', table 'CAP.Clients'; column does not allow nulls. {op} fails.\r\nThe statement has been terminated.");
             }
             if (client.CompanyAddress == null)
             {
-                throw new InvalidOperationException($"Cannot insert the value NULL into column 'CompanyAddress', table 'CAP.Clients'; column does not allow nulls. {op} fails.");
+                throw new InvalidOperationException($"Cannot insert the value NULL into column 'CompanyAddress', table 'CAP.Clients'; column does not allow nulls. {op} fails.\r\nThe statement has been terminated.");
             }
             if (client.CompanyName.Length > 150 || client.CompanyAddress.Length > 1000 ||
                 (client.Wcn != null && client.Wcn.Length > 8) ||

@@ -2303,13 +2303,13 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             {
                 if (x == null && y == null) return true;
                 if (x == null || y == null) return false;
-                return string.Equals(x.TrimEnd(), y.TrimEnd(), StringComparison.OrdinalIgnoreCase);
+                return string.Equals(x.TrimEnd(' '), y.TrimEnd(' '), StringComparison.OrdinalIgnoreCase);
             }
 
             public int GetHashCode(string? obj)
             {
                 if (obj == null) return 0;
-                return StringComparer.OrdinalIgnoreCase.GetHashCode(obj.TrimEnd());
+                return StringComparer.OrdinalIgnoreCase.GetHashCode(obj.TrimEnd(' '));
             }
         }
 

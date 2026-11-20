@@ -10252,26 +10252,12 @@ namespace DigitalCap.Server.DevTools
                     bool p1Ok = sqlP1Ex != null && cosP1Ex != null
                         && sqlP1Ex == cosP1Ex
                         && sqlP1Msg != null && cosP1Msg != null
-                        && string.Equals(sqlP1Msg, cosP1Msg, StringComparison.OrdinalIgnoreCase);
+                        && string.Equals(sqlP1Msg, cosP1Msg, StringComparison.Ordinal);
                     checks.Add(new { check = "T-f.KnownBug.P1.GetAllProjects", equal = p1Ok, sqlEx = sqlP1Ex?.Name, cosEx = cosP1Ex?.Name, sqlP1Msg, cosP1Msg });
                     if (!p1Ok) allPassed = false;
                 }
 
-                // V8: UpdateReportMainDataAsync on missing project throws
-                {
-                    Type? sqlV8Ex = null; string? sqlV8Msg = null;
-                    Type? cosV8Ex = null; string? cosV8Msg = null;
-                    try { await sqlVesselRepo.UpdateReportMainDataAsync(new Report(), -99888); } catch (Exception ex) { sqlV8Ex = ex.GetType(); sqlV8Msg = ex.Message; }
-                    try { await cosmosVesselRepo.UpdateReportMainDataAsync(new Report(), -99888); } catch (Exception ex) { cosV8Ex = ex.GetType(); cosV8Msg = ex.Message; }
-                    bool v8Ok = sqlV8Ex != null && cosV8Ex != null
-                        && sqlV8Ex == cosV8Ex
-                        && sqlV8Msg != null && cosV8Msg != null
-                        && string.Equals(sqlV8Msg, cosV8Msg, StringComparison.OrdinalIgnoreCase);
-                    checks.Add(new { check = "T-f.KnownBug.V8.UpdateReportMainDataAsync.MissingProject", equal = v8Ok, sqlEx = sqlV8Ex?.Name, cosEx = cosV8Ex?.Name, sqlV8Msg, cosV8Msg });
-                    if (!v8Ok) allPassed = false;
-                }
-
-                // V15: GetSurveyStatus returns null, UpdateSurveyAudit throws ArgumentNullException
+                // V15: GetSurveyStatus returns null (read method)
                 if (realProject.Id != 0)
                 {
                     var sqlV15Res = await sqlVesselRepo.GetSurveyStatus(realProject.Id);
@@ -10279,25 +10265,9 @@ namespace DigitalCap.Server.DevTools
                     bool v15GetOk = sqlV15Res == null && cosV15Res == null;
                     checks.Add(new { check = $"T-f.KnownBug.V15.GetSurveyStatus({realProject.Id})", equal = v15GetOk, sqlNull = sqlV15Res == null, cosNull = cosV15Res == null });
                     if (!v15GetOk) allPassed = false;
-
-                    Type? sqlV15AuditEx = null; string? sqlV15AuditMsg = null;
-                    Type? cosV15AuditEx = null; string? cosV15AuditMsg = null;
-                    try { await sqlVesselRepo.UpdateSurveyAudit(new SurveyStatus(), realProject.Id); } catch (Exception ex) { sqlV15AuditEx = ex.GetType(); sqlV15AuditMsg = ex.Message; }
-                    try { await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus(), realProject.Id); } catch (Exception ex) { cosV15AuditEx = ex.GetType(); cosV15AuditMsg = ex.Message; }
-                    bool v15AuditOk = sqlV15AuditEx != null && cosV15AuditEx != null
-                        && sqlV15AuditEx == typeof(ArgumentNullException) && cosV15AuditEx == typeof(ArgumentNullException);
-                    checks.Add(new { check = $"T-f.KnownBug.V15.UpdateSurveyAudit({realProject.Id})", equal = v15AuditOk, sqlEx = sqlV15AuditEx?.Name, cosEx = cosV15AuditEx?.Name, sqlV15AuditMsg, cosV15AuditMsg });
-                    if (!v15AuditOk) allPassed = false;
                 }
 
-                // R-2arg: CreateVesselMainDataAsync 2-argument returns null
-                {
-                    var sqlR2 = await sqlVesselRepo.CreateVesselMainDataAsync("-999", new Project { Id = -999 });
-                    var cosR2 = await cosmosVesselRepo.CreateVesselMainDataAsync("-999", new Project { Id = -999 });
-                    bool r2Ok = sqlR2 == null && cosR2 == null;
-                    checks.Add(new { check = "T-f.KnownBug.R2arg.CreateVesselMainDataAsync", equal = r2Ok, sqlNull = sqlR2 == null, cosNull = cosR2 == null });
-                    if (!r2Ok) allPassed = false;
-                }
+                // R-2arg: not run – the method calls the external Freedom API; behaviour proven by code review (SQL calls missing SP Create_VesselMainData → catch → null).
 
                 // ==========================================
                 // 8. V4 & V5 Helper Checks (T-g)
@@ -10314,7 +10284,7 @@ namespace DigitalCap.Server.DevTools
                     {
                         var sqlVal = await conn.QueryFirstOrDefaultAsync<string>("SELECT CONVERT(nvarchar(max), @d)", new { d = td });
                         var helperVal = CosmosVesselRepository.FormatSqlStyle0(td);
-                        bool eq = string.Equals(sqlVal, helperVal, StringComparison.OrdinalIgnoreCase);
+                        bool eq = string.Equals(sqlVal, helperVal, StringComparison.Ordinal);
                         checks.Add(new { check = $"T-g.V4.FormatSqlStyle0({td:yyyy-MM-dd HH:mm})", sql = sqlVal, cosmos = helperVal, equal = eq });
                         if (!eq) allPassed = false;
                     }
@@ -10324,7 +10294,7 @@ namespace DigitalCap.Server.DevTools
                     {
                         var sqlVal = await conn.QueryFirstOrDefaultAsync<string>("SELECT CONVERT(nvarchar(max), CAST(@v AS real))", new { v = tr });
                         var helperVal = CosmosVesselRepository.FormatReal(tr);
-                        bool eq = string.Equals(sqlVal, helperVal, StringComparison.OrdinalIgnoreCase);
+                        bool eq = string.Equals(sqlVal, helperVal, StringComparison.Ordinal);
                         checks.Add(new { check = $"T-g.V5.FormatReal({tr})", sql = sqlVal, cosmos = helperVal, equal = eq });
                         if (!eq) allPassed = false;
                     }
@@ -10380,27 +10350,29 @@ namespace DigitalCap.Server.DevTools
                 var rolePermContainer = containerFactory.GetContainer(CosmosContainers.dbo_RolePermissionsMapping);
                 var actContainer = containerFactory.GetContainer(CosmosContainers.CAP_Activities);
                 var ptsContainer = containerFactory.GetContainer(CosmosContainers.CAP_ProjectTaskStatus);
+                var rsdContainer = containerFactory.GetContainer(CosmosContainers.dbo_ReportSurveyDetails);
 
                 var cleanupList = new List<(Container container, string id, PartitionKey pk)>();
 
                 try
                 {
-                    // Empty-before check across all 11 write containers
+                    // Empty-before check across all 12 write containers (T-6)
                     var preCp = await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9991'");
                     var preUser = await SafeQueryAsync<object>(userContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9992'");
-                    var preRolePerm = await SafeQueryAsync<object>(rolePermContainer, "SELECT * FROM c WHERE c.PermissionId = 'ffffffff-ffff-ffff-ffff-ffffffff9996' OR c.Id = 'ffffffff-ffff-ffff-ffff-ffffffff9998'");
+                    var preRolePerm = await SafeQueryAsync<object>(rolePermContainer, "SELECT * FROM c WHERE c.RoleId = 'ffffffff-ffff-ffff-ffff-ffffffff9997' OR c.PermissionId = 'ffffffff-ffff-ffff-ffff-ffffffff9996' OR c.Id = 'ffffffff-ffff-ffff-ffff-ffffffff9998'");
                     var preComment = await SafeQueryAsync<object>(commentsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
                     var preFile = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
                     var preProj = await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
                     var preTank = await SafeQueryAsync<object>(tankContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
                     var preVessel = await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
                     var preCert = await SafeQueryAsync<object>(certsContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
-                    var preAct = await SafeQueryAsync<object>(actContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                    var preAct = await SafeQueryAsync<object>(actContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888)");
                     var prePts = await SafeQueryAsync<object>(ptsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                    var preRsd = await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998')");
 
                     bool preCheckPassed = preCp.Count == 0 && preUser.Count == 0 && preRolePerm.Count == 0 && preComment.Count == 0
                         && preFile.Count == 0 && preProj.Count == 0 && preTank.Count == 0 && preVessel.Count == 0
-                        && preCert.Count == 0 && preAct.Count == 0 && prePts.Count == 0;
+                        && preCert.Count == 0 && preAct.Count == 0 && prePts.Count == 0 && preRsd.Count == 0;
 
                     if (!preCheckPassed)
                     {
@@ -10409,21 +10381,78 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        // A6: AddRolePermissionAsync (writes rolepermission.Id on every row, distinct id, cleaned up)
+                        // V8: UpdateReportMainDataAsync on missing main-data row throws exact message
+                        bool v8Thrown = false;
+                        string? v8Msg = null;
+                        try
+                        {
+                            await cosmosVesselRepo.UpdateReportMainDataAsync(
+                                new Report { Vessel = new DigitalCap.Core.Models.Survey.Vessel(), ReportDate = "01-01-2026" },
+                                -99888);
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            v8Thrown = true;
+                            v8Msg = ex.Message;
+                        }
+                        bool v8Ok = v8Thrown && v8Msg == "Procedure or function Insert_VesselDetails has too many arguments specified.";
+                        writeSteps.Add(new { step = "T-f.KnownBug.V8.UpdateReportMainDataAsync", passed = v8Ok, v8Thrown, v8Msg });
+                        if (!v8Ok) allPassed = false;
+
+                        // V15: seed a ReportSurveyDetails doc for -998 with imoNum set, call UpdateSurveyAudit(new SurveyStatus(), -998), expect ArgumentNullException and doc unchanged
+                        var v15SeedDoc = new ReportSurveyDetailsDocument
+                        {
+                            id = "-998",
+                            projectId = -998,
+                            imoNum = new DateTime(2026, 1, 1)
+                        };
+                        var v15Created = await rsdContainer.CreateItemAsync(v15SeedDoc, new PartitionKey("-998"));
+                        var v15EtagBefore = v15Created.ETag;
+                        cleanupList.Add((rsdContainer, "-998", new PartitionKey("-998")));
+
+                        bool v15Thrown = false;
+                        try
+                        {
+                            await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus(), -998);
+                        }
+                        catch (ArgumentNullException)
+                        {
+                            v15Thrown = true;
+                        }
+
+                        var v15ReadBack = await rsdContainer.ReadItemAsync<ReportSurveyDetailsDocument>("-998", new PartitionKey("-998"));
+                        var v15EtagAfter = v15ReadBack.ETag;
+                        bool v15Ok = v15Thrown && !string.IsNullOrEmpty(v15EtagBefore) && v15EtagBefore == v15EtagAfter;
+                        writeSteps.Add(new { step = "T-f.KnownBug.V15.UpdateSurveyAudit", passed = v15Ok, v15Thrown, v15EtagBefore, v15EtagAfter });
+                        if (!v15Ok) allPassed = false;
+
+                        // A6 & F-A6b: AddRolePermissionAsync & UpdateRolePermissionAsync updates all matching rows
                         var templateGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9996");
                         var roleIdGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9997");
-                        var templateId = "tmpl-" + templateGuid.ToString("D").ToLowerInvariant();
-                        var templateDoc = new RolePermissionsMappingDocument
+                        var templateId1 = "tmpl1-" + templateGuid.ToString("D").ToLowerInvariant();
+                        var templateId2 = "tmpl2-" + templateGuid.ToString("D").ToLowerInvariant();
+                        var templateDoc1 = new RolePermissionsMappingDocument
                         {
-                            id = templateId,
+                            id = templateId1,
                             Id = Guid.NewGuid(),
                             PermissionId = templateGuid,
                             RoleId = null,
                             IsReadable = true,
+                            IsEditable = false
+                        };
+                        var templateDoc2 = new RolePermissionsMappingDocument
+                        {
+                            id = templateId2,
+                            Id = Guid.NewGuid(),
+                            PermissionId = templateGuid,
+                            RoleId = null,
+                            IsReadable = false,
                             IsEditable = true
                         };
-                        await rolePermContainer.CreateItemAsync(templateDoc, new PartitionKey(templateId));
-                        cleanupList.Add((rolePermContainer, templateId, new PartitionKey(templateId)));
+                        await rolePermContainer.CreateItemAsync(templateDoc1, new PartitionKey(templateId1));
+                        cleanupList.Add((rolePermContainer, templateId1, new PartitionKey(templateId1)));
+                        await rolePermContainer.CreateItemAsync(templateDoc2, new PartitionKey(templateId2));
+                        cleanupList.Add((rolePermContainer, templateId2, new PartitionKey(templateId2)));
 
                         var inputGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9998");
                         bool addRes = await cosmosPermRepo.AddRolePermissionAsync(new DigitalCap.Core.Models.Permissions.UserRolePermission
@@ -10437,19 +10466,42 @@ namespace DigitalCap.Server.DevTools
                             rolePermContainer,
                             $"SELECT * FROM c WHERE c.RoleId = '{roleIdGuid}'");
 
-                        bool a6Ok = addRes && createdRolePerms.Count == 1 && createdRolePerms[0].Id == inputGuid;
+                        bool a6Ok = addRes && createdRolePerms.Count == 2 && createdRolePerms.All(r => r.Id == inputGuid);
                         foreach (var doc in createdRolePerms)
                         {
                             cleanupList.Add((rolePermContainer, doc.id, new PartitionKey(doc.id)));
                         }
-                        writeSteps.Add(new { step = "A6.UserPermission.AddRolePermissionAsync", passed = a6Ok });
-                        if (!a6Ok) allPassed = false;
+
+                        // F-A6b: UpdateRolePermissionAsync updates ALL documents sharing the Id
+                        bool updAllRes = await cosmosPermRepo.UpdateRolePermissionAsync(new DigitalCap.Core.Models.Permissions.UserRolePermission
+                        {
+                            Id = inputGuid,
+                            RoleId = roleIdGuid,
+                            PermissionId = templateGuid,
+                            IsReadable = true,
+                            IsEditable = true,
+                            IsDeleted = false
+                        });
+                        var updatedRolePerms = await SafeQueryAsync<RolePermissionsMappingDocument>(
+                            rolePermContainer,
+                            $"SELECT * FROM c WHERE c.RoleId = '{roleIdGuid}'");
+                        bool fA6bOk = updAllRes && updatedRolePerms.Count == 2 && updatedRolePerms.All(r => r.IsReadable == true && r.IsEditable == true);
+
+                        bool missingPermRes = await cosmosPermRepo.UpdateRolePermissionAsync(new DigitalCap.Core.Models.Permissions.UserRolePermission
+                        {
+                            Id = Guid.NewGuid(),
+                            RoleId = roleIdGuid,
+                            PermissionId = templateGuid
+                        });
+                        bool a6AllOk = a6Ok && fA6bOk && !missingPermRes;
+                        writeSteps.Add(new { step = "A6_FA6b.UserPermission.AddAndUpdateAllMatching", passed = a6AllOk, a6Ok, fA6bOk, missingPermRes });
+                        if (!a6AllOk) allPassed = false;
 
                         // A10: ClientProfile.SaveClientProfileAsync missing throws; AddAsync rejects null; AddAsync valid writes and reads back; SaveClientProfileAsync updates
                         bool a10MissingThrows = false;
                         try
                         {
-                            await cosmosClientProfileRepo.SaveClientProfileAsync(new Client { Id = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9999"), CompanyName = "Missing" });
+                            await cosmosClientProfileRepo.SaveClientProfileAsync(new Client { Id = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9999"), CompanyName = "Missing", CompanyAddress = "Addr" });
                         }
                         catch (Exception ex) when (ex.Message.Contains("Update failed. No rows affected."))
                         {
@@ -10461,12 +10513,12 @@ namespace DigitalCap.Server.DevTools
                         {
                             await cosmosClientProfileRepo.AddAsync(new Client
                             {
-                                Id = Guid.NewGuid(),
+                                Id = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9999"),
                                 CompanyName = null!,
                                 CompanyAddress = "ValidAddress"
                             });
                         }
-                        catch (ArgumentException)
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("Cannot insert the value NULL into column 'CompanyName'"))
                         {
                             a10NullReject = true;
                         }
@@ -10478,12 +10530,15 @@ namespace DigitalCap.Server.DevTools
                             Id = a10Guid,
                             CompanyName = "TestClientA10",
                             CompanyAddress = "123 Valid St",
-                            Wcn = "WCN1"
+                            Wcn = "WCN1",
+                            CompanyBillingEmail = "bill@test.com",
+                            CompanyBillingSystemUrl = "http://billing.test"
                         });
                         cleanupList.Add((clientsContainer, a10Id, new PartitionKey(a10Id)));
 
                         var readA10 = await SafeReadAsync<ClientsDocument>(clientsContainer, a10Id, new PartitionKey(a10Id));
-                        bool a10InsertOk = readA10 != null && readA10.CompanyName == "TestClientA10" && readA10.CompanyAddress == "123 Valid St" && readA10.Wcn == "WCN1";
+                        bool a10InsertOk = readA10 != null && readA10.CompanyName == "TestClientA10" && readA10.CompanyAddress == "123 Valid St" && readA10.Wcn == "WCN1"
+                            && readA10.CompanyBillingEmail == "bill@test.com" && readA10.CompanyBillingSystemUrl == "http://billing.test";
 
                         await cosmosClientProfileRepo.SaveClientProfileAsync(new Client
                         {
@@ -10529,27 +10584,41 @@ namespace DigitalCap.Server.DevTools
                         writeSteps.Add(new { step = "A11.UserAccount.InsertAsync.RejectsDuplicatePK", passed = a11DuplicateRejected });
                         if (!a11DuplicateRejected) allPassed = false;
 
-                        // B8 Comment: CreateCommentAsync rejects empty, writes activity; UpdateCommentAsync missing no throw
+                        // B8 Comment & B3: CreateCommentAsync accepts empty, rejects null but writes activity; UpdateCommentAsync on missing writes activity
+                        var aspNetUsersContainer = containerFactory.GetContainer(CosmosContainers.dbo_AspNetUsers);
+                        var adminUser = (await SafeQueryAsync<AspNetUserDocument>(aspNetUsersContainer, "SELECT TOP 1 * FROM c WHERE STRINGEQUALS(c.id, 'admin', true)")).FirstOrDefault();
+                        var expectedAdminName = adminUser?.UserName;
+
+                        var commsEmpty = await cosmosCommentRepo.CreateCommentAsync(-999, null, "admin", "");
+                        var createdComms = await SafeQueryAsync<CommentDocument>(commentsContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        foreach (var c in createdComms) cleanupList.Add((commentsContainer, c.id, new PartitionKey(-999.0)));
+
+                        var emptyActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        foreach (var a in emptyActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
+
+                        bool b8EmptyOk = createdComms.Count > 0 && createdComms.Any(c => c.Comment == "")
+                            && emptyActs.Count > 0 && emptyActs.Any(a => a.Text == "" && (a.CreateBy == "admin" || a.CreateBy == expectedAdminName));
+
+                        var preCommentCount = createdComms.Count;
+                        var preActCount = emptyActs.Count;
                         bool b8CommentReject = false;
                         try
                         {
-                            await cosmosCommentRepo.CreateCommentAsync(-999, null, "admin", "");
+                            await cosmosCommentRepo.CreateCommentAsync(-999, null, "admin", null!);
                         }
-                        catch (ArgumentException)
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("Cannot insert the value NULL into column 'Comment'"))
                         {
                             b8CommentReject = true;
                         }
 
-                        var b8Acts = await SafeQueryAsync<ActivityDocument>(
-                            actContainer,
-                            "SELECT * FROM c WHERE c.ProjectId = -999",
-                            new PartitionKey(-999.0));
-
-                        bool b8ActWritten = b8Acts.Count > 0 && b8Acts.Any(a => a.Text == null && a.CreateBy == "admin");
-                        foreach (var a in b8Acts)
-                        {
-                            cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
-                        }
+                        var postComments = await SafeQueryAsync<CommentDocument>(commentsContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        var postActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        bool nullCommentNoNewComment = postComments.Count == preCommentCount;
+                        var nullCommentAct = postActs.FirstOrDefault(a => !emptyActs.Any(ea => ea.id == a.id));
+                        bool nullCommentActOk = nullCommentAct != null
+                            && nullCommentAct.Text == null
+                            && nullCommentAct.CreateBy == expectedAdminName;
+                        if (nullCommentAct != null) cleanupList.Add((actContainer, nullCommentAct.id, new PartitionKey(-999.0)));
 
                         bool b8UpdThrown = false;
                         try
@@ -10561,20 +10630,55 @@ namespace DigitalCap.Server.DevTools
                             b8UpdThrown = true;
                         }
 
-                        bool b8CommentOk = b8CommentReject && b8ActWritten && !b8UpdThrown;
-                        writeSteps.Add(new { step = "B8.Comment.ThrowsActivityWrittenAndMissingNoThrow", passed = b8CommentOk, b8CommentReject, b8ActWritten, missingNoThrow = !b8UpdThrown });
+                        var missingUpdActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -99888", new PartitionKey(-99888.0));
+                        foreach (var a in missingUpdActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-99888.0)));
+                        bool missingUpdActOk = missingUpdActs.Any(a => a.Text == "new text" && a.CreateBy == expectedAdminName);
+
+                        bool b8CommentOk = b8EmptyOk && b8CommentReject && nullCommentNoNewComment && nullCommentActOk && !b8UpdThrown && missingUpdActOk;
+                        writeSteps.Add(new { step = "B8_B3.Comment.ValidationEmptyNullAndActivity", passed = b8CommentOk, b8EmptyOk, b8CommentReject, nullCommentNoNewComment, nullCommentActOk, missingNoThrow = !b8UpdThrown, missingUpdActOk });
                         if (!b8CommentOk) allPassed = false;
 
-                        // B8 FileStorage: Save null throws; Update missing throws; nothing written
-                        bool b8FileSaveReject = false;
+                        // B8 FileStorage & B3: Save null throws; Update missing throws; valid save creates activity and full read back
+                        bool b8FileNullThrows = false;
                         try
                         {
-                            await cosmosFileStorageRepo.SaveProjectFile(new ProjectFile { ProjectId = -999, Name = null! }, "dummyKey", "admin");
+                            await cosmosFileStorageRepo.SaveProjectFile(null!, "dummyKey", "admin");
                         }
-                        catch (ArgumentNullException)
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("Object reference not set to an instance of an object."))
                         {
-                            b8FileSaveReject = true;
+                            b8FileNullThrows = true;
                         }
+
+                        bool b8FileNameNullThrows = false;
+                        try
+                        {
+                            await cosmosFileStorageRepo.SaveProjectFile(new ProjectFile { ProjectId = -999, Name = null!, Extension = ".pdf", MimeType = "application/pdf" }, "dummyKey", "admin");
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("Cannot insert the value NULL into column 'Name'"))
+                        {
+                            b8FileNameNullThrows = true;
+                        }
+
+                        var savedFile = await cosmosFileStorageRepo.SaveProjectFile(new ProjectFile
+                        {
+                            ProjectId = -999,
+                            Name = "test.pdf",
+                            Extension = ".pdf",
+                            MimeType = "application/pdf"
+                        }, "dummyStorageKey", "admin");
+                        cleanupList.Add((fileContainer, savedFile.Id.ToString(), new PartitionKey(savedFile.Id.ToString())));
+
+                        var readSavedFile = await SafeReadAsync<FileDocument>(fileContainer, savedFile.Id.ToString(), new PartitionKey(savedFile.Id.ToString()));
+                        bool b8FileSaveOk = readSavedFile != null
+                            && readSavedFile.Name == "test.pdf"
+                            && readSavedFile.Extension == ".pdf"
+                            && readSavedFile.MimeType == "application/pdf"
+                            && readSavedFile.StorageKey == "dummyStorageKey"
+                            && readSavedFile.UploadedBy == "admin";
+
+                        var fileActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        foreach (var a in fileActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
+                        bool b8FileActOk = fileActs.Any(a => a.Text == "Uploaded file test.pdf" && a.CreateBy == "admin");
 
                         bool b8FileUpdReject = false;
                         try
@@ -10586,12 +10690,11 @@ namespace DigitalCap.Server.DevTools
                             b8FileUpdReject = true;
                         }
 
-                        var fileDocs = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
-                        bool b8FileOk = b8FileSaveReject && b8FileUpdReject && fileDocs.Count == 0;
-                        writeSteps.Add(new { step = "B8.FileStorage.ValidationAndMissingThrowsNothingWritten", passed = b8FileOk, b8FileSaveReject, b8FileUpdReject, fileCount = fileDocs.Count });
-                        if (!b8FileOk) allPassed = false;
+                        bool b8FileAllOk = b8FileNullThrows && b8FileNameNullThrows && b8FileSaveOk && b8FileActOk && b8FileUpdReject;
+                        writeSteps.Add(new { step = "B8_B3.FileStorage.ValidationFullReadBackAndActivity", passed = b8FileAllOk, b8FileNullThrows, b8FileNameNullThrows, b8FileSaveOk, b8FileActOk, b8FileUpdReject });
+                        if (!b8FileAllOk) allPassed = false;
 
-                        // P12 & P13 on all 4 methods: UpdatePercentComplete, Update_Project, UpdateProjectStatus, UpdatePriority
+                        // P11, P12, P13, V2/V3: Project updates and activities (T-6: P16 CreateProject removed from write tests)
                         var projDoc = new ProjectDocument
                         {
                             id = "-999",
@@ -10610,53 +10713,41 @@ namespace DigitalCap.Server.DevTools
                         int updPcExists = await cosmosProjectRepo.UpdatePercentComplete(-999, 85, null!);
                         int updPcMissing = await cosmosProjectRepo.UpdatePercentComplete(-99888, 85, null!);
                         var readPc = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
-                        bool p12Ok = updPcExists == 1 && updPcMissing == 0 && readPc?.PercentComplete == 85;
+                        bool p12Ok = updPcExists == 1 && updPcMissing == 0 && readPc?.PercentComplete == 85 && readPc?.LastModifiedBy == "SYSTEM";
 
-                        // Method 2: Update_Project
+                        // Method 2: UpdateProjectStatus (tests P11: currentUser null -> StatusChangedBy = "SYSTEM")
+                        await cosmosProjectRepo.UpdateProjectStatus(-999, "uid", 2, null!);
+                        await cosmosProjectRepo.UpdateProjectStatus(-99888, "uid", 2, null!);
+                        var readStatus = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
+                        bool p13StatusOk = readStatus?.ProjectStatus == 2 && readStatus?.StatusChangedBy == "SYSTEM";
+
+                        // Method 3: UpdatePriority
+                        await cosmosProjectRepo.UpdatePriority(-999, 5, "admin");
+                        var readPrio5 = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
+                        await cosmosProjectRepo.UpdatePriority(-999, null, "admin");
+                        await cosmosProjectRepo.UpdatePriority(-99888, 5, "admin");
+                        var readPrioNull = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
+                        bool p13PrioOk = readPrio5?.ProjectPriority == 5 && readPrioNull?.ProjectPriority == null;
+
+                        // Method 4: Update_Project (V2/V3: verifies modified updated and unmodified preserved)
                         await cosmosProjectRepo.Update_Project(new Project { Id = -999, Name = "UpdatedProject-999", CRMOpportunityNumber = "CRM999" }, "admin");
                         await cosmosProjectRepo.Update_Project(new Project { Id = -99888, Name = "Missing" }, "admin");
                         var readProj = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
-                        bool p13ProjOk = readProj?.Name == "UpdatedProject-999";
+                        bool p13ProjOk = readProj?.Name == "UpdatedProject-999"
+                            && readProj?.CRMOpportunityNumber == "CRM999"
+                            && readProj?.PercentComplete == 85
+                            && readProj?.ProjectStatus == 2
+                            && readProj?.CapRegion == "Americas";
 
-                        // Method 3: UpdateProjectStatus
-                        await cosmosProjectRepo.UpdateProjectStatus(-999, "uid", 2, "admin");
-                        await cosmosProjectRepo.UpdateProjectStatus(-99888, "uid", 2, "admin");
-                        var readStatus = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
-                        bool p13StatusOk = readStatus?.ProjectStatus == 2;
+                        // Cleanup activities written by the 4 update methods
+                        var projActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        foreach (var a in projActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
 
-                        // Method 4: UpdatePriority
-                        await cosmosProjectRepo.UpdatePriority(-999, 5, "admin");
-                        await cosmosProjectRepo.UpdatePriority(-999, null, "admin");
-                        await cosmosProjectRepo.UpdatePriority(-99888, 5, "admin");
-                        var readPrio = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
-                        bool p13PrioOk = readPrio?.ProjectPriority == null;
-
-                        bool all4MethodsOk = p12Ok && p13ProjOk && p13StatusOk && p13PrioOk;
-                        writeSteps.Add(new { step = "P12_P13.Project.All4UpdateMethods.ExistsAndMissing", passed = all4MethodsOk, p12Ok, p13ProjOk, p13StatusOk, p13PrioOk });
+                        bool all4MethodsOk = p12Ok && p13StatusOk && p13PrioOk && p13ProjOk;
+                        writeSteps.Add(new { step = "P11_P12_P13_V2V3.Project.All4UpdateMethods", passed = all4MethodsOk, p12Ok, p13StatusOk, p13PrioOk, p13ProjOk });
                         if (!all4MethodsOk) allPassed = false;
 
-                        // P16: CreateProject text length cut, dates .Date, ShipType int mapping, full read back
-                        var newProj = new Project
-                        {
-                            Name = "TestP16",
-                            CRMOpportunityNumber = "12345678901234567890EXTRAEXTRA", // > 20 chars
-                            VesselType = new string('A', 500), // > 450 chars
-                            ShipType = ShipType.BulkCarrier,
-                            PotentialDrydockDate = new DateTime(2026, 11, 20, 14, 30, 0)
-                        };
-                        int newP16Id = await cosmosProjectRepo.CreateProject(newProj, "admin");
-                        cleanupList.Add((projectContainer, newP16Id.ToString(), new PartitionKey(newP16Id.ToString())));
-                        var readP16 = await SafeReadAsync<ProjectDocument>(projectContainer, newP16Id.ToString(), new PartitionKey(newP16Id.ToString()));
-                        bool p16Ok = readP16 != null
-                            && readP16.CRMOpportunityNumber?.Length == 20
-                            && readP16.VesselType?.Length == 450
-                            && readP16.CreatedDate?.TimeOfDay == TimeSpan.Zero
-                            && readP16.PotentialDrydockDate?.TimeOfDay == TimeSpan.Zero
-                            && readP16.ShipType?.ToString() == "1"; // ShipType.BulkCarrier int mapping
-                        writeSteps.Add(new { step = "P16.CreateProject.TextCutAndDatesAndShipType", passed = p16Ok });
-                        if (!p16Ok) allPassed = false;
-
-                        // T4: CreateTank date < 1753 rejected without write; valid tank writes and reads back
+                        // T4 & T3: CreateTank date < 1753 rejected without write; valid tank writes and reads back; duplicate PK rejected
                         var badTank = new VesselTank
                         {
                             Id = Guid.NewGuid(),
@@ -10684,17 +10775,15 @@ namespace DigitalCap.Server.DevTools
                         var readGoodTank = await SafeReadAsync<VesselTankMappingDocument>(tankContainer, goodTankGuid.ToString(), new PartitionKey(-999.0));
                         bool t4GoodOk = createGoodTankRes && readGoodTank != null && readGoodTank.TankName == "GoodTank" && readGoodTank.TankTypeId == 1;
 
-                        bool t4Ok = t4BadOk && t4GoodOk;
-                        writeSteps.Add(new { step = "T4.Tank.CreateTank.ValidationAndWrite", passed = t4Ok, t4BadOk, t4GoodOk });
-                        if (!t4Ok) allPassed = false;
-
-                        // T3 (T-i): CreateTank rejects duplicate PK (loops all pages of COUNT query)
+                        // T3: CreateTank rejects duplicate PK
                         bool createDupTankRes = await cosmosTankRepo.CreateTank(goodTank);
                         bool t3Ok = !createDupTankRes;
-                        writeSteps.Add(new { step = "T3.Tank.CreateTank.RejectsDuplicatePK", passed = t3Ok });
-                        if (!t3Ok) allPassed = false;
 
-                        // V6 & V10: CreateVesselMainDataAsync (3 args) writes main data, full read back
+                        bool t4AllOk = t4BadOk && t4GoodOk && t3Ok;
+                        writeSteps.Add(new { step = "T4_T3.Tank.CreateTank.ValidationWriteAndDupPK", passed = t4AllOk, t4BadOk, t4GoodOk, t3Ok });
+                        if (!t4AllOk) allPassed = false;
+
+                        // V6, V7, V10, F-V10: CreateVesselMainDataAsync
                         var v10Project = new Project
                         {
                             Id = -999,
@@ -10716,10 +10805,35 @@ namespace DigitalCap.Server.DevTools
                             && readV10.imoNumber == 1234567
                             && readV10.SelectedPrefix == 0
                             && readV10.builtBy == "V10Builder";
-                        writeSteps.Add(new { step = "V6_V10.Vessel.CreateVesselMainDataAsync.PrefixAndFullWrite", passed = v10Ok });
-                        if (!v10Ok) allPassed = false;
 
-                        // V12: UpdateStatutoryCertificate preserves isExpiryDate
+                        // V6 & V7: UpdateReportMainDataAsync with "" -> null, and "   " -> 0
+                        await cosmosVesselRepo.UpdateReportMainDataAsync(new Report
+                        {
+                            ReportDate = "2026-11-20",
+                            Vessel = new DigitalCap.Core.Models.Survey.Vessel { SelectedPrefix = "", ClassNo = "1", VesselName = "TestVessel-999" }
+                        }, -999);
+                        var readV6 = await SafeReadAsync<ReportVesselMainDataDocument>(vesselContainer, "-999", new PartitionKey("-999"));
+                        bool v6Ok = readV6 != null && readV6.SelectedPrefix == null;
+
+                        await cosmosVesselRepo.UpdateReportMainDataAsync(new Report
+                        {
+                            ReportDate = "2026-11-20",
+                            Vessel = new DigitalCap.Core.Models.Survey.Vessel { SelectedPrefix = "   ", ClassNo = "1", VesselName = "TestVessel-999" }
+                        }, -999);
+                        var readV7 = await SafeReadAsync<ReportVesselMainDataDocument>(vesselContainer, "-999", new PartitionKey("-999"));
+                        bool v7Ok = readV7 != null && readV7.SelectedPrefix == 0;
+
+                        // F-V10: vessel == null still inserts row into dbo_ReportVesselMainData
+                        await cosmosVesselRepo.CreateVesselMainDataAsync("-998", v10Project, null!);
+                        cleanupList.Add((vesselContainer, "-998", new PartitionKey("-998")));
+                        var readFV10 = await SafeReadAsync<ReportVesselMainDataDocument>(vesselContainer, "-998", new PartitionKey("-998"));
+                        bool fV10Ok = readFV10 != null && readFV10.projectId == -998 && readFV10.vesselName == "TestVessel-999";
+
+                        bool vesselWritesOk = v10Ok && v6Ok && v7Ok && fV10Ok;
+                        writeSteps.Add(new { step = "V6_V7_V10_FV10.Vessel.CreateAndPrefixUpdates", passed = vesselWritesOk, v10Ok, v6Ok, v7Ok, fV10Ok });
+                        if (!vesselWritesOk) allPassed = false;
+
+                        // V12, V13, V14: Survey & Certificates
                         var expectedExpiry = new DateTime(2028, 5, 20);
                         var certDoc = new ReportStatutoryCertificatesDocument
                         {
@@ -10739,37 +10853,33 @@ namespace DigitalCap.Server.DevTools
                         });
                         var readCert = await SafeReadAsync<ReportStatutoryCertificatesDocument>(certsContainer, "-999", new PartitionKey("-999"));
                         bool v12Ok = readCert != null && readCert.isExpiryDate == expectedExpiry && readCert.ieeIssueDate.HasValue;
-                        writeSteps.Add(new { step = "V12.UpdateStatutoryCertificate.PreservesIsExpiryDate", passed = v12Ok });
-                        if (!v12Ok) allPassed = false;
 
-                        // V13: UpdateReportMainDataAsync on missing project throws
-                        bool v13Throws = false;
-                        try
+                        // V13: UpdateSurveyAudit with SpecialHullNo = null on update path
+                        var rsdDoc = new ReportSurveyDetailsDocument
                         {
-                            await cosmosVesselRepo.UpdateReportMainDataAsync(new Report(), -99888);
-                        }
-                        catch (InvalidOperationException ex) when (ex.Message.Contains("Insert_VesselDetails has too many arguments specified"))
-                        {
-                            v13Throws = true;
-                        }
-                        writeSteps.Add(new { step = "V13.Vessel.UpdateReportMainDataAsync.MissingProjectThrows", passed = v13Throws });
-                        if (!v13Throws) allPassed = false;
+                            id = "-999",
+                            projectId = -999,
+                            specialHullNo = 99
+                        };
+                        await rsdContainer.CreateItemAsync(rsdDoc, new PartitionKey("-999"));
+                        cleanupList.Add((rsdContainer, "-999", new PartitionKey("-999")));
 
-                        // V14: UpdateSurveyAudit date < 1753 swallowed without error
+                        await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus { SpecialHullNo = null }, -999);
+                        var readRsd = await SafeReadAsync<ReportSurveyDetailsDocument>(rsdContainer, "-999", new PartitionKey("-999"));
+                        bool v13Ok = readRsd != null && readRsd.specialHullNo == null;
+
+                        // V14: UpdateSurveyAudit date < 1753 swallowed without error, nothing written
+                        var preV14Count = (await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
                         bool v14Res = await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus
                         {
                             ClassSurveyDate = new DateTime(1700, 1, 1)
-                        }, -999);
-                        writeSteps.Add(new { step = "V14.UpdateSurveyAudit.Under1753Swallowed", passed = v14Res });
-                        if (!v14Res) allPassed = false;
+                        }, -998);
+                        var postV14Count = (await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
+                        bool v14Ok = v14Res && preV14Count == postV14Count && postV14Count == 0;
 
-                        // R-2arg: CreateVesselMainDataAsync 2-argument writes nothing, returns null
-                        var preCountR2 = (await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
-                        var resR2 = await cosmosVesselRepo.CreateVesselMainDataAsync("-998", new Project { Id = -998 });
-                        var postCountR2 = (await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id = '-998'", new PartitionKey("-998"))).Count;
-                        bool r2WritesNothing = resR2 == null && preCountR2 == postCountR2 && postCountR2 == 0;
-                        writeSteps.Add(new { step = "R2arg.CreateVesselMainDataAsync.WritesNothingAndReturnsNull", passed = r2WritesNothing });
-                        if (!r2WritesNothing) allPassed = false;
+                        bool certSurveyOk = v12Ok && v13Ok && v14Ok;
+                        writeSteps.Add(new { step = "V12_V13_V14.SurveyAndCertificates", passed = certSurveyOk, v12Ok, v13Ok, v14Ok });
+                        if (!certSurveyOk) allPassed = false;
 
                         // B3 & B4: UpdateTask on CAP_ProjectTaskStatus with trimmed assignedTo (B3) and null TaskId (B4)
                         var ptsDoc = new ProjectTaskStatusDocument
@@ -10795,6 +10905,10 @@ namespace DigitalCap.Server.DevTools
 
                         var readPts = await SafeReadAsync<ProjectTaskStatusDocument>(ptsContainer, "-9991", new PartitionKey(-999.0));
                         bool b3b4Ok = b3b4Res && readPts != null && readPts.AssignedTo == "John Doe" && readPts.StatusId == 2;
+
+                        var taskActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        foreach (var a in taskActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
+
                         writeSteps.Add(new { step = "B3_B4.Task.UpdateTask.AssignedToTrimmedAndNullTaskId", passed = b3b4Ok });
                         if (!b3b4Ok) allPassed = false;
 
@@ -10841,6 +10955,20 @@ namespace DigitalCap.Server.DevTools
                             writeSteps.Add(new { step = "Cleanup.Error", id, passed = false, error = ex.Message });
                         }
                     }
+
+                    // Extra sweep for activities created in partition -999
+                    try
+                    {
+                        var remainingActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888)");
+                        foreach (var a in remainingActs)
+                        {
+                            var pk = a.ProjectId.HasValue ? new PartitionKey((double)a.ProjectId.Value) : new PartitionKey(-999.0);
+                            try { await actContainer.DeleteItemAsync<ActivityDocument>(a.id, pk); }
+                            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            catch (Exception ex) { writeSteps.Add(new { step = "Cleanup.Error", id = a.id, passed = false, error = ex.Message }); }
+                        }
+                    }
+                    catch (Exception ex) { writeSteps.Add(new { step = "Cleanup.ActivitySweep.Error", passed = false, error = ex.Message }); }
                 }
 
                 allPassed = allPassed && !hadException

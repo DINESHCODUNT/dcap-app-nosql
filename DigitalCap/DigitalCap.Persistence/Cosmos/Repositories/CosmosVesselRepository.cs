@@ -238,18 +238,34 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             return existing == DateTime.MinValue ? null : existing;
         }
 
+        private static bool HasPre1753Date(params DateTime?[] dates)
+        {
+            foreach (var d in dates)
+            {
+                if (d.HasValue && d.Value != DateTime.MinValue && d.Value.Year < 1753)
+                    return true;
+            }
+            return false;
+        }
+
         public async Task<bool> UpdateSurveyAudit(Core.Models.Survey.SurveyStatus surveyStatus, int projectId)
         {
             var data = (await GetSurveyStatus(projectId))?.ToList();
             if (data == null)
             {
-                throw new ArgumentNullException(nameof(data));
+                throw new ArgumentNullException("source", "Value cannot be null. (Parameter 'source')");
             }
 
             if (data.Count == 0)
             {
-                if ((surveyStatus.ClassSurveyDate.HasValue && surveyStatus.ClassSurveyDate.Value.Year < 1753) ||
-                    (surveyStatus.DryDockDate.HasValue && surveyStatus.DryDockDate.Value.Year < 1753))
+                if (surveyStatus.ClassSurveyDate < new DateTime(1753, 1, 1) || surveyStatus.DryDockDate < new DateTime(1753, 1, 1) || HasPre1753Date(
+                    surveyStatus.ClassSurveyDate, surveyStatus.DryDockDate,
+                    surveyStatus.SpecialContinuousMachineryDate, surveyStatus.BoilerDate, surveyStatus.TailshaftDate,
+                    surveyStatus.SpecialContinuousHull1, surveyStatus.SpecialContinuousHull2, surveyStatus.SpecialContinuousHull3,
+                    surveyStatus.SpecialContinuousHull4, surveyStatus.SpecialContinuousHull5, surveyStatus.SpecialContinuousHull6,
+                    surveyStatus.SpecialContinuousHull7, surveyStatus.SpecialContinuousHull8, surveyStatus.SpecialContinuousHull9,
+                    surveyStatus.SpecialContinuousHull10, surveyStatus.SpecialContinuousHull11, surveyStatus.SpecialContinuousHull12,
+                    surveyStatus.SpecialContinuousHull13, surveyStatus.SpecialContinuousHull14, surveyStatus.SpecialContinuousHull15))
                 {
                     // SQL datetime overflow (< 1753) is swallowed, writes nothing
                     return true;
@@ -325,6 +341,19 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                             : (surveyStatusData?.SpecialHullNo == 0 ? null : surveyStatusData?.SpecialHullNo)
                     };
 
+                    if (HasPre1753Date(
+                        doc.classSurveyDate, doc.dryDockDate,
+                        doc.specialContinuousMachineryDate, doc.boilerDate, doc.tailshaftDate,
+                        doc.specialContinuousHull1, doc.specialContinuousHull2, doc.specialContinuousHull3,
+                        doc.specialContinuousHull4, doc.specialContinuousHull5, doc.specialContinuousHull6,
+                        doc.specialContinuousHull7, doc.specialContinuousHull8, doc.specialContinuousHull9,
+                        doc.specialContinuousHull10, doc.specialContinuousHull11, doc.specialContinuousHull12,
+                        doc.specialContinuousHull13, doc.specialContinuousHull14, doc.specialContinuousHull15))
+                    {
+                        // SQL datetime overflow (< 1753) is swallowed, writes nothing
+                        return true;
+                    }
+
                     await Sp_Update_SurveyDetails(doc);
                     Commit();
                 }
@@ -359,6 +388,9 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
                 if (data == null)
                 {
+                    // SQL evaluates report.Vessel.SelectedPrefix (NRE if Vessel is null) and Convert.ToDateTime(report.ReportDate) before executing the SP
+                    _ = report.Vessel.SelectedPrefix;
+                    _ = Convert.ToDateTime(report.ReportDate);
                     // KNOWN SQL BUG (reported to dcap-app team)
                     throw new InvalidOperationException("Procedure or function Insert_VesselDetails has too many arguments specified.");
                 }
@@ -372,7 +404,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     {
                         selPrefix = null;
                     }
-                    else if (string.IsNullOrWhiteSpace(report.Vessel.SelectedPrefix))
+                    else if (report.Vessel.SelectedPrefix.TrimEnd(' ') == "")
                     {
                         selPrefix = 0; // Spaces-only in SQL converts to 0
                     }
@@ -527,12 +559,6 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         {
             try
             {
-                if (vessel == null)
-                {
-                    // SQL VesselRepository line 39: write only when vessel != null
-                    return;
-                }
-
                 var firstVisit = project.SurveyFirstVisit != null && project.SurveyFirstVisit != DateTime.MinValue
                     ? project.SurveyFirstVisit.Value.ToString("dd-MM-yyy")
                     : DateTime.Now.ToString("dd-MM-yyy");
@@ -554,20 +580,42 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     classed = project.ClassSociety != null && project.ClassSociety.Length > 0 ? project.ClassSociety[0] : null,
                     firstVisitDate = firstVisit,
                     lastVisitDate = lastVisit,
-                    SelectedPrefix = 0,
-                    vesselID = vessel.ImoNumber != null && int.TryParse(vessel.ImoNumber, out var vImo) ? vImo : (int?)null,
-                    vesselType = vessel.VesselType,
-                    flagName = vessel.FlagName,
-                    homeport = vessel.PortRegistry,
-                    officalNumber = vessel.OfficialNumber,
-                    callSign = vessel.CallSign,
-                    ownerName = vessel.RegisteredOwner?.Name,
-                    breadth = FormatReal(vessel.BreadthMolded?.Value),
-                    depth = FormatReal(vessel.DepthMolded?.Value),
-                    deadweight = vessel.DesignDeadWeight?.Value,
-                    netTons = FormatReal(vessel.NetTonnage?.Value),
-                    classNotation = vessel.ClassNotation
+                    SelectedPrefix = 0
                 };
+
+                if (vessel != null)
+                {
+                    int? vImo = null;
+                    if (vessel.ImoNumber != null)
+                    {
+                        var trimmed = vessel.ImoNumber.TrimEnd(' ');
+                        if (trimmed == "")
+                        {
+                            vImo = 0;
+                        }
+                        else if (int.TryParse(vessel.ImoNumber.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                        {
+                            vImo = parsed;
+                        }
+                        else
+                        {
+                            throw new FormatException($"Conversion failed when converting the varchar value '{vessel.ImoNumber}' to data type int.");
+                        }
+                    }
+
+                    doc.vesselID = vImo;
+                    doc.vesselType = vessel.VesselType;
+                    doc.flagName = vessel.FlagName;
+                    doc.homeport = vessel.PortRegistry;
+                    doc.officalNumber = vessel.OfficialNumber;
+                    doc.callSign = vessel.CallSign;
+                    doc.ownerName = vessel.RegisteredOwner?.Name;
+                    doc.breadth = vessel.BreadthMolded?.Value;
+                    doc.depth = vessel.DepthMolded?.Value;
+                    doc.deadweight = vessel.DesignDeadWeight?.Value;
+                    doc.netTons = vessel.NetTonnage?.Value;
+                    doc.classNotation = vessel.ClassNotation;
+                }
 
                 await Sp_Insert_VesselDetails(doc);
                 Commit();
@@ -950,6 +998,19 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
         private static Core.Models.Vessel MapToCoreVessel(VesselDocument d)
         {
+            int imoNum = 0;
+            if (d.IMONum != null)
+            {
+                if (int.TryParse(d.IMONum, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedImo))
+                {
+                    imoNum = parsedImo;
+                }
+                else
+                {
+                    throw new System.Data.DataException($"Error parsing column 8 (IMONum={d.IMONum} - String) -> Int32");
+                }
+            }
+
             return new Core.Models.Vessel
             {
                 Vessel_ID = d.Vessel_ID,
@@ -960,7 +1021,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                 Depth = d.Depth ?? 0,
                 Draft = d.Draft ?? 0,
                 HullNum = d.HullNum!,
-                IMONum = int.TryParse(d.IMONum, out var parsedImo) ? parsedImo : 0,
+                IMONum = imoNum,
                 Length = d.Length ?? 0,
                 MarketSegment = d.MarketSegment!,
                 VesselName = d.VesselName!,

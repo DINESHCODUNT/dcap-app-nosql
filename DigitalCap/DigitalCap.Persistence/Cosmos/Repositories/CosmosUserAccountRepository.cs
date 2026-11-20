@@ -396,7 +396,8 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             {
                 return Enumerable.Empty<CapUser>();
             }
-            if (!Guid.TryParse(clientId, out var clientGuid))
+            var rawId = clientId.Length > 100 ? clientId.Substring(0, 100) : clientId;
+            if (!Guid.TryParseExact(rawId, "D", out var clientGuid) && !Guid.TryParseExact(rawId, "B", out clientGuid))
             {
                 throw new InvalidOperationException("Conversion failed when converting from a character string to uniqueidentifier.");
             }
