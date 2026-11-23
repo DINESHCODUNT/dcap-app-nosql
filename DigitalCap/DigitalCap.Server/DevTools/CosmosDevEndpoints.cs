@@ -33,6 +33,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -156,6 +157,111 @@ namespace DigitalCap.Server.DevTools
         }
     }
 
+    public static class ParityDeep
+    {
+        // Compares EVERY public property (recursively). Strings: ordinal. DateTime/DateTimeOffset: < 4 ms (SQL datetime precision).
+        public static object Single<T>(string check, T? sql, T? cosmos, bool bothNullAllowed = false)
+        {
+            if (sql == null && cosmos == null) return new { check, equal = bothNullAllowed, diff = "both null" };
+            if (sql == null || cosmos == null) return new { check, equal = false, diff = sql == null ? "sql null" : "cosmos null" };
+            var diff = FirstDiff(sql, cosmos, "", 0);
+            return new { check, equal = diff == null, diff };
+        }
+
+        // Use only when the SQL has ORDER BY (row order must match).
+        public static object ListsOrdered<T>(string check, IEnumerable<T>? sql, IEnumerable<T>? cosmos, bool bothEmptyAllowed = false)
+        {
+            var s = sql?.ToList() ?? new List<T>();
+            var c = cosmos?.ToList() ?? new List<T>();
+            return CompareLists(check, s, c, bothEmptyAllowed);
+        }
+
+        // Use when the SQL has no ORDER BY: both sides are sorted by the same key first.
+        public static object Lists<T, TKey>(string check, IEnumerable<T>? sql, IEnumerable<T>? cosmos, Func<T, TKey> sortKey, bool bothEmptyAllowed = false)
+        {
+            var s = (sql ?? Enumerable.Empty<T>()).OrderBy(sortKey).ToList();
+            var c = (cosmos ?? Enumerable.Empty<T>()).OrderBy(sortKey).ToList();
+            return CompareLists(check, s, c, bothEmptyAllowed);
+        }
+
+        // Use when the SQL ORDER BY can have ties (its columns are not unique per row):
+        // the ORDER BY key sequence must match exactly; rows with the same key are compared as a set (sorted by tieBreak).
+        public static object ListsOrderedWithTies<T, TKey, TId>(string check, IEnumerable<T>? sql, IEnumerable<T>? cosmos, Func<T, TKey> orderKey, Func<T, TId> tieBreak, bool bothEmptyAllowed = false)
+        {
+            var s = sql?.ToList() ?? new List<T>();
+            var c = cosmos?.ToList() ?? new List<T>();
+            if (s.Count > 0 && s.Count == c.Count)
+            {
+                var keyDiff = FirstDiff(s.Select(x => (object?)orderKey(x)).ToList(), c.Select(x => (object?)orderKey(x)).ToList(), "orderKey", 0);
+                if (keyDiff != null) return new { check, equal = false, sqlCount = s.Count, cosmosCount = c.Count, diff = (string?)keyDiff };
+            }
+            return CompareLists(check, SortWithinTies(s, orderKey, tieBreak), SortWithinTies(c, orderKey, tieBreak), bothEmptyAllowed);
+        }
+
+        private static List<T> SortWithinTies<T, TKey, TId>(List<T> list, Func<T, TKey> orderKey, Func<T, TId> tieBreak)
+        {
+            var result = new List<T>();
+            int i = 0;
+            while (i < list.Count)
+            {
+                int j = i + 1;
+                while (j < list.Count && FirstDiff(orderKey(list[i]), orderKey(list[j]), "", 0) == null) j++;
+                result.AddRange(list.GetRange(i, j - i).OrderBy(tieBreak));
+                i = j;
+            }
+            return result;
+        }
+
+        private static object CompareLists<T>(string check, List<T> s, List<T> c, bool bothEmptyAllowed)
+        {
+            if (s.Count == 0 && c.Count == 0) return new { check, equal = bothEmptyAllowed, sqlCount = 0, cosmosCount = 0, diff = (string?)"both empty" };
+            if (s.Count != c.Count) return new { check, equal = false, sqlCount = s.Count, cosmosCount = c.Count, diff = (string?)"row count differs" };
+            for (int i = 0; i < s.Count; i++)
+            {
+                var d = FirstDiff(s[i], c[i], $"[{i}]", 0);
+                if (d != null) return new { check, equal = false, sqlCount = s.Count, cosmosCount = c.Count, diff = (string?)d };
+            }
+            return new { check, equal = true, sqlCount = s.Count, cosmosCount = c.Count, diff = (string?)null };
+        }
+
+        private static string? FirstDiff(object? a, object? b, string path, int depth)
+        {
+            if (a == null && b == null) return null;
+            if (a == null || b == null) return $"{path}: sql={(a ?? "null")} cosmos={(b ?? "null")}";
+            if (depth > 6) return null;
+            var t = a.GetType();
+            if (t != b.GetType()) return $"{path}: type {t.Name} vs {b.GetType().Name}";
+            if (a is string sa) return string.Equals(sa, (string)b, StringComparison.Ordinal) ? null : $"{path}: sql='{sa}' cosmos='{b}'";
+            if (a is DateTime da) return Math.Abs((da - (DateTime)b).TotalMilliseconds) < 4 ? null : $"{path}: sql={da:O} cosmos={(DateTime)b:O}";
+            if (a is DateTimeOffset oa) return Math.Abs((oa - (DateTimeOffset)b).TotalMilliseconds) < 4 ? null : $"{path}: sql={oa:O} cosmos={(DateTimeOffset)b:O}";
+            if (t.IsPrimitive || t.IsEnum || a is decimal || a is Guid) return a.Equals(b) ? null : $"{path}: sql={a} cosmos={b}";
+            if (a is System.Collections.IEnumerable ea && b is System.Collections.IEnumerable eb)
+            {
+                var la = ea.Cast<object?>().ToList();
+                var lb = eb.Cast<object?>().ToList();
+                if (la.Count != lb.Count) return $"{path}: count {la.Count} vs {lb.Count}";
+                for (int i = 0; i < la.Count; i++)
+                {
+                    var d = FirstDiff(la[i], lb[i], $"{path}[{i}]", depth + 1);
+                    if (d != null) return d;
+                }
+                return null;
+            }
+            foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
+                var d = FirstDiff(p.GetValue(a), p.GetValue(b), $"{path}.{p.Name}", depth + 1);
+                if (d != null) return d;
+            }
+            foreach (var f in t.GetFields(BindingFlags.Public | BindingFlags.Instance))
+            {
+                var d = FirstDiff(f.GetValue(a), f.GetValue(b), $"{path}.{f.Name}", depth + 1);
+                if (d != null) return d;
+            }
+            return null;
+        }
+    }
+
     public static class CosmosDevEndpoints
     {
         public static WebApplication MapCosmosDevEndpoints(this WebApplication app)
@@ -172,6 +278,7 @@ namespace DigitalCap.Server.DevTools
             MapParityBatch9(app);
             MapParityBatch10A(app);
             MapDevCopyTable(app);
+            MapDevCopyAll(app);
             return app;
         }
 
@@ -2876,6 +2983,88 @@ namespace DigitalCap.Server.DevTools
                 {
                     return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
                 }
+            }).AllowAnonymous();
+        }
+
+        private static void MapDevCopyAll(WebApplication app)
+        {
+            // Copies every SQL table that has a Cosmos container (CosmosContainers.PartitionKeys), one by one,
+            // with SqlToCosmosCopier (upsert, so it can be re-run). Also seeds sys_Counters (done by the copier).
+            // ?only=container1,container2 re-runs only those containers.
+            app.MapGet("/dev/copy-all", async (
+                string? confirm,
+                string? only,
+                SqlToCosmosCopier copier) =>
+            {
+                if (!string.Equals(confirm, "yes", StringComparison.Ordinal))
+                {
+                    return Results.BadRequest(new { error = "add ?confirm=yes to copy all tables" });
+                }
+
+                var allowedIdentityTables = new[] { "AspNetUsers", "AspNetRoles", "AspNetUserRoles", "UserAccounts", "AspNetUserLogins" };
+
+                // Tables without a primary key (see COSMOS_CONVERSION_PROMPT.md section 7)
+                var idColumns = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [CosmosContainers.dbo_SubSection] = "id",
+                    [CosmosContainers.dbo_Section_ImageDescriptionMapping] = "SectionId,CategoryId",
+                    [CosmosContainers.dbo_Tank_ImageDescriptionMapping] = "TankTypeId,CategoryId",
+                    [CosmosContainers.Config_VesselTypeSectionDescriptionMapping] = "SectionId,CategoryId",
+                    [CosmosContainers.Config_VesselTypeSubSectionDescriptionMapping] = "SubSectionId,CategoryId",
+                    [CosmosContainers.Config_VesselTypeSectionGradingMapping] = "SectionId,CategoryId",
+                    [CosmosContainers.Config_VesselTypeTankGradingMapping] = "TankTypeId,CategoryId",
+                    [CosmosContainers.Config_ProjectSectionDescriptionMapping] = "SectionId,CategoryId",
+                    [CosmosContainers.Config_ProjectSubSectionDescriptionMapping] = "SubSectionId,CategoryId",
+                    [CosmosContainers.Config_ProjectSectionGradingMapping] = "SectionId,CategoryId"
+                };
+
+                HashSet<string>? onlySet = string.IsNullOrWhiteSpace(only)
+                    ? null
+                    : new HashSet<string>(only.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), StringComparer.Ordinal);
+
+                var results = new List<object>();
+                int okCount = 0, failCount = 0, skipCount = 0;
+
+                foreach (var container in CosmosContainers.PartitionKeys.Keys.OrderBy(k => k, StringComparer.Ordinal))
+                {
+                    if (container == CosmosContainers.sys_Counters) continue;
+                    if (onlySet != null && !onlySet.Contains(container)) continue;
+
+                    var sep = container.IndexOf('_');
+                    var schema = container.Substring(0, sep);
+                    var table = container.Substring(sep + 1);
+
+                    if (string.Equals(schema, "dbo", StringComparison.OrdinalIgnoreCase)
+                        && table.StartsWith("AspNet", StringComparison.OrdinalIgnoreCase)
+                        && !allowedIdentityTables.Contains(table, StringComparer.OrdinalIgnoreCase))
+                    {
+                        skipCount++;
+                        results.Add(new { container, status = "SKIPPED", reason = "AspNet table not in the copy allow-list" });
+                        Console.WriteLine($"[copy-all] {container}: SKIPPED (not in allow-list)");
+                        continue;
+                    }
+
+                    idColumns.TryGetValue(container, out var idColumn);
+                    try
+                    {
+                        Console.WriteLine($"[copy-all] {container}: copying...");
+                        // CancellationToken.None: finish even if the browser/client stops waiting
+                        var r = await copier.CopyTableAsync(schema, table, idColumn, CancellationToken.None);
+                        bool ok = r.failed == 0 && r.upserted == r.sqlRows && r.errors.Count == 0;
+                        if (ok) okCount++; else failCount++;
+                        results.Add(new { container, status = ok ? "OK" : "FAILED", r.sqlRows, r.upserted, r.failed, r.counterSeededTo, r.idSource, r.seconds, r.errors });
+                        Console.WriteLine($"[copy-all] {container}: {(ok ? "OK" : "FAILED")} sqlRows={r.sqlRows} upserted={r.upserted} failed={r.failed} errors={r.errors.Count}");
+                    }
+                    catch (Exception ex)
+                    {
+                        failCount++;
+                        results.Add(new { container, status = "FAILED", error = ex.Message });
+                        Console.WriteLine($"[copy-all] {container}: FAILED {ex.Message}");
+                    }
+                }
+
+                Console.WriteLine($"[copy-all] DONE ok={okCount} failed={failCount} skipped={skipCount}");
+                return Results.Ok(new { allOk = failCount == 0, okCount, failCount, skipCount, results });
             }).AllowAnonymous();
         }
 
@@ -9456,23 +9645,67 @@ namespace DigitalCap.Server.DevTools
                 // Reference queries from DB
                 var realUser = await conn.QueryFirstOrDefaultAsync<(string Id, string Email, string UserName)>(
                     "SELECT TOP 1 Id, Email, UserName FROM [dbo].[AspNetUsers] WHERE Id IS NOT NULL AND Email IS NOT NULL AND UserName IS NOT NULL AND Active = 1");
+                if (realUser.Id == null) { checks.Add(new { check = "Input.User", equal = false, error = "no data" }); allPassed = false; }
+
                 var realClientId = await conn.QueryFirstOrDefaultAsync<Guid>(
                     "SELECT TOP 1 Id FROM [CAP].[Clients] WHERE Id IS NOT NULL AND Id != '00000000-0000-0000-0000-000000000000'");
+                if (realClientId == Guid.Empty) { checks.Add(new { check = "Input.ClientId", equal = false, error = "no data" }); allPassed = false; }
+
                 var realPort = await conn.QueryFirstOrDefaultAsync<int>(
-                    "SELECT TOP 1 Id FROM [core].[PortOfCall] WHERE Id IS NOT NULL");
+                    "SELECT TOP 1 PortId FROM [core].[PortOfCall] WHERE PortId IS NOT NULL");
+                if (realPort == 0) { checks.Add(new { check = "Input.Port", equal = false, error = "no data" }); allPassed = false; }
+
                 var realProject = await conn.QueryFirstOrDefaultAsync<(int Id, int? ClientId, int? Imo, string VesselType, string LeadSurveyor)>(
                     "SELECT TOP 1 ID as Id, ClientProfileId as ClientId, IMO as Imo, VesselType, LeadSurveyor FROM [CAP].[Projects] WHERE ID IS NOT NULL AND IMO IS NOT NULL AND IMO > 0");
+                if (realProject.Id == 0) { checks.Add(new { check = "Input.Project", equal = false, error = "no data" }); allPassed = false; }
+
                 var realTask = await conn.QueryFirstOrDefaultAsync<(int Id, int? ProjectId)>(
                     "SELECT TOP 1 ID as Id, ProjectId FROM [CAP].[ProjectTaskStatus] WHERE ID IS NOT NULL AND ProjectId IS NOT NULL");
+                if (realTask.Id == 0) { checks.Add(new { check = "Input.Task", equal = false, error = "no data" }); allPassed = false; }
+
                 var realVesselType = await conn.QueryFirstOrDefaultAsync<string>(
-                    "SELECT TOP 1 VesselType FROM [dbo].[VesselType] WHERE VesselType IS NOT NULL") ?? "Bulk Carrier";
+                    "SELECT TOP 1 VesselType FROM [dbo].[VesselType] WHERE VesselType IS NOT NULL");
+                if (realVesselType == null) { checks.Add(new { check = "Input.VesselType", equal = false, error = "no data" }); allPassed = false; }
+
                 var realTemplate = await conn.QueryFirstOrDefaultAsync<(int TemplateId, string TemplateName)>(
                     "SELECT TOP 1 TemplateId, TemplateName FROM [dbo].[H&I_ReportTemplate] WHERE TemplateId IS NOT NULL AND TemplateName IS NOT NULL");
-                if (realTemplate.TemplateId == 0) realTemplate = (1, "Bulk Carrier");
+                if (realTemplate.TemplateId == 0 || realTemplate.TemplateName == null) { checks.Add(new { check = "Input.Template", equal = false, error = "no data" }); allPassed = false; }
+
                 var realTankType = await conn.QueryFirstOrDefaultAsync<string>(
-                    "SELECT TOP 1 TankType FROM [dbo].[Vessel_TankMapping] WHERE TankType IS NOT NULL") ?? "Ballast Tank";
+                    "SELECT TOP 1 TankType FROM [dbo].[Vessel_TankMapping] WHERE TankType IS NOT NULL");
+                if (realTankType == null) { checks.Add(new { check = "Input.TankType", equal = false, error = "no data" }); allPassed = false; }
+
                 var realRole = await conn.QueryFirstOrDefaultAsync<string>(
-                    "SELECT TOP 1 Name FROM [dbo].[AspNetRoles] WHERE Name IS NOT NULL") ?? "Admin";
+                    "SELECT TOP 1 Name FROM [dbo].[AspNetRoles] WHERE Name IS NOT NULL");
+                if (realRole == null) { checks.Add(new { check = "Input.Role", equal = false, error = "no data" }); allPassed = false; }
+
+                // 3c: Real part mapping from [Config].[VesselTypePartMapping]
+                var realPartMapping = await conn.QueryFirstOrDefaultAsync<(int VesselTypeId, string PartName, int PartId)>(
+                    "SELECT TOP 1 VesselTypeId, PartName, VesselTypePartMappingId AS PartId FROM [Config].[VesselTypePartMapping] WHERE IsActive = 1 AND IsDeleted = 0 AND PartName IS NOT NULL ORDER BY VesselTypePartMappingId");
+                if (realPartMapping.PartId == 0 || realPartMapping.PartName == null) { checks.Add(new { check = "Input.PartMapping", equal = false, error = "no data" }); allPassed = false; }
+
+                var realGradingTemplateId = await conn.QueryFirstOrDefaultAsync<int>(
+                    "SELECT TOP 1 Id FROM [dbo].[ReportTemplate] WHERE Id != 0 AND Id != 8 ORDER BY Id");
+                if (realGradingTemplateId == 0) { checks.Add(new { check = "Input.GradingTemplateId", equal = false, error = "no data" }); allPassed = false; }
+
+                // 3b: Port search sample text
+                var portSearchSample = await conn.QueryFirstOrDefaultAsync<string>(
+                    "SELECT TOP 1 PortName FROM [core].[PortOfCall] WHERE PortName IS NOT NULL AND LEN(PortName) >= 4 ORDER BY PortId");
+                if (portSearchSample == null) { checks.Add(new { check = "Input.PortSearchSample", equal = false, error = "no data" }); allPassed = false; }
+
+                // 3d: Project with VesselName IS NULL
+                var nullVesselProjId = await conn.QueryFirstOrDefaultAsync<int?>(
+                    "SELECT TOP 1 ID FROM [CAP].[Projects] WHERE VesselName IS NULL ORDER BY ID");
+
+                // A7 real RolePermission Id
+                var realRolePermId = await conn.QueryFirstOrDefaultAsync<Guid?>(
+                    "SELECT TOP 1 Id FROM [dbo].[RolePermissionsMapping] WHERE Id IS NOT NULL ORDER BY Id");
+                if (!realRolePermId.HasValue) { checks.Add(new { check = "Input.RolePermId", equal = false, error = "no data" }); allPassed = false; }
+
+                // D4 real ImageDescription inputs
+                var realImgDesc = await conn.QueryFirstOrDefaultAsync<(string VesselType, string SectionName, string PartName, string Description)>(
+                    "SELECT TOP 1 vt.VesselType, vns.SectionName, vtp.PartName, ides.Description FROM [dbo].[ImageDescriptions] ides INNER JOIN [Config].[VesselTypeSectionDescriptionMapping] vsdm ON ides.CategoryId = vsdm.CategoryId INNER JOIN [Config].[VesselTypeNormalSectionMapping] vns ON vsdm.SectionId = vns.SectionMappingId INNER JOIN [Config].[VesselTypePartMapping] vtp ON vns.VesselTypePartMappingId = vtp.VesselTypePartMappingId INNER JOIN [dbo].[VesselType] vt ON vtp.VesselTypeId = vt.Id WHERE ides.Description IS NOT NULL AND vns.IsActive = 1 AND vns.IsDeleted = 0 ORDER BY ides.Id");
+                if (realImgDesc.Description == null) { checks.Add(new { check = "Input.ImageDescription", equal = false, error = "no data" }); allPassed = false; }
 
                 // ==========================================
                 // 1. Group 1 (Batches 1-3) Read Checks
@@ -9490,21 +9723,8 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Single($"A1.UserAccount.GetByAspNetIdAsync({realUser.Id})", sqlU, cosU,
-                            ("Id", x => x.Id),
-                            ("AspNetUserId", x => x.AspNetUserId),
-                            ("ClientId", x => x.ClientId),
-                            ("FirstName", x => x.FirstName),
-                            ("LastName", x => x.LastName),
-                            ("Company", x => x.Company),
-                            ("Email", x => x.Email),
-                            ("Phone", x => x.Phone),
-                            ("TimeZone", x => x.TimeZone),
-                            ("CreatedBy", x => x.CreatedBy),
-                            ("CreatedAt", x => DateKey(x.CreatedAt)),
-                            ("UpdatedBy", x => x.UpdatedBy),
-                            ("UpdatedAt", x => DateKey(x.UpdatedAt)),
-                            ("Deleted", x => x.Deleted)));
+                        // ORDER BY: n/a - single row (sp_UserAccounts_GetByAspNetId)
+                        checks.Add(ParityDeep.Single($"A1.UserAccount.GetByAspNetIdAsync({realUser.Id})", sqlU, cosU));
                     }
                 }
 
@@ -9521,11 +9741,8 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Lists($"A2.ClientProfile.GetClientAdminsAsync({realClientId})", sqlAdmins, cosAdmins, x => x.Email, false,
-                            ("FirstName", x => x.FirstName),
-                            ("LastName", x => x.LastName),
-                            ("Email", x => x.Email),
-                            ("UserRole", x => x.UserRole)));
+                        // ORDER BY FirstName, LastName (GetClientAdminsAsync) – ties possible
+                        checks.Add(ParityDeep.ListsOrderedWithTies($"A2.ClientProfile.GetClientAdminsAsync({realClientId})", sqlAdmins, cosAdmins, x => (x.FirstName, x.LastName), x => x.Email));
                     }
                 }
 
@@ -9541,16 +9758,8 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Lists("A3.UserAccount.GetAbsUsersAsync", sqlAbs, cosAbs, x => x.Id, false,
-                            ("Id", x => x.Id),
-                            ("AspNetUserId", x => x.AspNetUserId),
-                            ("FirstName", x => x.FirstName),
-                            ("LastName", x => x.LastName),
-                            ("Company", x => x.Company),
-                            ("Email", x => x.Email),
-                            ("Phone", x => x.Phone),
-                            ("TimeZone", x => x.TimeZone),
-                            ("UserRole", x => x.UserRole)));
+                        // ORDER BY: no (sp_UserAccounts_GetAbsUsers)
+                        checks.Add(ParityDeep.Lists("A3.UserAccount.GetAbsUsersAsync", sqlAbs, cosAbs, x => x.Id));
                     }
                 }
 
@@ -9567,16 +9776,8 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Lists($"A4_A5.UserAccount.GetClientUsersAsync({realClientId})", sqlCu, cosCu, x => x.Id, false,
-                            ("Id", x => x.Id),
-                            ("AspNetUserId", x => x.AspNetUserId),
-                            ("FirstName", x => x.FirstName),
-                            ("LastName", x => x.LastName),
-                            ("Email", x => x.Email),
-                            ("Company", x => x.Company),
-                            ("Phone", x => x.Phone),
-                            ("TimeZone", x => x.TimeZone),
-                            ("UserRole", x => x.UserRole)));
+                        // ORDER BY: no (sp_UserAccounts_GetClientUsers)
+                        checks.Add(ParityDeep.Lists($"A4_A5.UserAccount.GetClientUsersAsync({realClientId})", sqlCu, cosCu, x => x.Id));
                     }
                 }
 
@@ -9584,19 +9785,52 @@ namespace DigitalCap.Server.DevTools
                 {
                     var sqlNullCu = (await sqlUserAccountRepo.GetClientUsersAsync(null!)).ToList();
                     var cosNullCu = (await cosmosUserAccountRepo.GetClientUsersAsync(null!)).ToList();
-                    bool eqA7 = sqlNullCu.Count == 0 && cosNullCu.Count == 0;
-                    checks.Add(new { check = "A7.UserAccount.GetClientUsersAsync(null)", equal = eqA7, sqlCount = sqlNullCu.Count, cosCount = cosNullCu.Count });
-                    if (!eqA7) allPassed = false;
+                    // ORDER BY: no (sp_UserAccounts_GetClientUsers)
+                    checks.Add(ParityDeep.Lists("A7.UserAccount.GetClientUsersAsync(null)", sqlNullCu, cosNullCu, x => x.Id, bothEmptyAllowed: true));
+                }
+
+                // A7: GetRolePermissionById & GetRolePermission
+                if (realRolePermId.HasValue)
+                {
+                    var idStr = realRolePermId.Value.ToString();
+                    var sqlRpById = await sqlPermRepo.GetRolePermissionById(idStr);
+                    var cosRpById = await cosmosPermRepo.GetRolePermissionById(idStr);
+                    // ORDER BY: n/a - single row (dbo.GetUserRolePermissionById)
+                    checks.Add(ParityDeep.Single($"A7.UserPermission.GetRolePermissionById({idStr})", sqlRpById, cosRpById));
+
+                    var sqlRp = await sqlPermRepo.GetRolePermission(idStr);
+                    var cosRp = await cosmosPermRepo.GetRolePermission(idStr);
+                    // ORDER BY: no (dbo.GetUserRolePermission)
+                    checks.Add(ParityDeep.Lists($"A7.UserPermission.GetRolePermission({idStr})", sqlRp, cosRp, x => x.Id));
+                }
+
+                foreach (var badId in new[] { "", "not-a-guid" })
+                {
+                    bool sqlByIdThrew = false; string? sqlByIdEx = null;
+                    bool cosByIdThrew = false; string? cosByIdEx = null;
+                    try { await sqlPermRepo.GetRolePermissionById(badId); } catch (Exception ex) { sqlByIdThrew = true; sqlByIdEx = ex.Message; }
+                    try { await cosmosPermRepo.GetRolePermissionById(badId); } catch (Exception ex) { cosByIdThrew = true; cosByIdEx = ex.Message; }
+                    bool byIdThrewEq = sqlByIdThrew && cosByIdThrew;
+                    checks.Add(new { check = $"A7.UserPermission.GetRolePermissionById.ThrowsOnBadId('{badId}')", equal = byIdThrewEq, sqlByIdThrew, cosByIdThrew, sqlByIdEx, cosByIdEx });
+                    if (!byIdThrewEq) allPassed = false;
+
+                    bool sqlRpThrew = false; string? sqlRpEx = null;
+                    bool cosRpThrew = false; string? cosRpEx = null;
+                    try { await sqlPermRepo.GetRolePermission(badId); } catch (Exception ex) { sqlRpThrew = true; sqlRpEx = ex.Message; }
+                    try { await cosmosPermRepo.GetRolePermission(badId); } catch (Exception ex) { cosRpThrew = true; cosRpEx = ex.Message; }
+                    bool rpThrewEq = sqlRpThrew && cosRpThrew;
+                    checks.Add(new { check = $"A7.UserPermission.GetRolePermission.ThrowsOnBadId('{badId}')", equal = rpThrewEq, sqlRpThrew, cosRpThrew, sqlRpEx, cosRpEx });
+                    if (!rpThrewEq) allPassed = false;
                 }
 
                 // A8: UserPermission GetAllRoles & Users in Role (trailing space S2 to BOTH sides)
+                if (realRole != null)
                 {
                     var sqlRoles = await sqlPermRepo.GetAllRoles();
                     var cosRoles = await cosmosPermRepo.GetAllRoles();
                     methodPositiveRows["UserPermission.GetAllRoles"] = sqlRoles.Count;
-                    checks.Add(ParityCompare.Lists("A8.UserPermission.GetAllRoles", sqlRoles, cosRoles, x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("Name", x => x.Name)));
+                    // ORDER BY: no (dbo.GetAspNetUserRoles)
+                    checks.Add(ParityDeep.Lists("A8.UserPermission.GetAllRoles", sqlRoles, cosRoles, x => x.Id));
 
                     var sqlUir = (await sqlUserAccountRepo.GetUsersInRoleAsync(realRole + "   ")).ToList();
                     var cosUir = (await cosmosUserAccountRepo.GetUsersInRoleAsync(realRole + "   ")).ToList();
@@ -9608,12 +9842,8 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Lists($"A8.UserAccount.GetUsersInRoleAsync.TrailingSpaces({realRole})", sqlUir, cosUir, x => x.Id, false,
-                            ("Id", x => x.Id),
-                            ("AspNetUserId", x => x.AspNetUserId),
-                            ("FirstName", x => x.FirstName),
-                            ("LastName", x => x.LastName),
-                            ("Email", x => x.Email)));
+                        // ORDER BY: no (sp_UserAccounts_GetUsersInRole)
+                        checks.Add(ParityDeep.Lists($"A8.UserAccount.GetUsersInRoleAsync.TrailingSpaces({realRole})", sqlUir, cosUir, x => x.Id));
                     }
                 }
 
@@ -9630,21 +9860,25 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Single($"A9.Port.GetById({realPort})", sqlP, cosP,
-                            ("Id", x => x.Id),
-                            ("Code", x => x.Code),
-                            ("Name", x => x.Name),
-                            ("CountryCode", x => x.CountryCode)));
+                        // ORDER BY: n/a - single row (Core.PortOfCall)
+                        checks.Add(ParityDeep.Single($"A9.Port.GetById({realPort})", sqlP, cosP));
                     }
 
-                    var sqlSearch = (await sqlPortRepo.Search("Singapore")).ToList();
-                    var cosSearch = (await cosmosPortRepo.Search("Singapore")).ToList();
-                    methodPositiveRows["Port.Search"] = sqlSearch.Count;
-                    checks.Add(ParityCompare.Lists("A9.Port.Search(Singapore)", sqlSearch, cosSearch, x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("Code", x => x.Code),
-                        ("Name", x => x.Name),
-                        ("CountryCode", x => x.CountryCode)));
+                    if (portSearchSample != null && portSearchSample.Length >= 4)
+                    {
+                        var searchText1 = portSearchSample.Substring(0, 4);
+                        var sqlSearch1 = (await sqlPortRepo.Search(searchText1)).ToList();
+                        var cosSearch1 = (await cosmosPortRepo.Search(searchText1)).ToList();
+                        methodPositiveRows["Port.Search"] = sqlSearch1.Count;
+                        // ORDER BY: no (CAP.Port_Search)
+                        checks.Add(ParityDeep.Lists($"A9.Port.Search({searchText1})", sqlSearch1, cosSearch1, x => x.Id));
+
+                        var searchText2 = $"{searchText1.Substring(0, 2)}_{searchText1[3]}";
+                        var sqlSearch2 = (await sqlPortRepo.Search(searchText2)).ToList();
+                        var cosSearch2 = (await cosmosPortRepo.Search(searchText2)).ToList();
+                        // ORDER BY: no (CAP.Port_Search)
+                        checks.Add(ParityDeep.Lists($"A9.Port.Search.Pattern({searchText2})", sqlSearch2, cosSearch2, x => x.Id));
+                    }
                 }
 
                 // ==========================================
@@ -9663,17 +9897,8 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Lists($"B1_B6.Task.GetCap2Tasks({realProject.Id})", sqlTasks, cosTasks, x => x.ID, false,
-                            ("ID", x => x.ID),
-                            ("ProjectId", x => x.ProjectId),
-                            ("TaskId", x => x.TaskId),
-                            ("StatusId", x => x.StatusId),
-                            ("Task", x => x.Task),
-                            ("Status", x => x.Status),
-                            ("Notes", x => x.Notes),
-                            ("AssignedTo", x => x.AssignedTo),
-                            ("NumberOfComments", x => x.NumberOfComments),
-                            ("NumberOfAttachments", x => x.NumberOfAttachments)));
+                        // ORDER BY: no (CAP.Read_Cap2Tasks_ByProjectId)
+                        checks.Add(ParityDeep.Lists($"B1_B6.Task.GetCap2Tasks({realProject.Id})", sqlTasks, cosTasks, x => x.ID));
                     }
                 }
 
@@ -9682,14 +9907,8 @@ namespace DigitalCap.Server.DevTools
                     var sqlActs = (await sqlActivityRepo.GetRecentActivitiesAsync2(1, 10)).ToList();
                     var cosActs = (await cosmosActivityRepo.GetRecentActivitiesAsync2(1, 10)).ToList();
                     methodPositiveRows["Activity.GetRecentActivitiesAsync2"] = sqlActs.Count;
-                    checks.Add(ParityCompare.Lists("B2.Activity.GetRecentActivitiesAsync2(1, 10)", sqlActs, cosActs, null, true,
-                        ("ID", x => x.ID),
-                        ("ProjectId", x => x.ProjectId),
-                        ("PIDNumber", x => x.PIDNumber),
-                        ("VesselName", x => x.VesselName),
-                        ("Text", x => x.Text),
-                        ("CreateBy", x => x.CreateBy),
-                        ("CreateDttm", x => DateKey(x.CreateDttm))));
+                    // ORDER BY CreateDttm (CAP.Read_Activities) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies("B2.Activity.GetRecentActivitiesAsync2(1, 10)", sqlActs, cosActs, x => x.CreateDttm, x => x.ID));
                 }
 
                 // B3 (T-i): GetRecentActivitiesByProjectIdAsync
@@ -9698,14 +9917,8 @@ namespace DigitalCap.Server.DevTools
                     var sqlProjActs = (await sqlActivityRepo.GetRecentActivitiesByProjectIdAsync(10, realProject.Id)).ToList();
                     var cosProjActs = (await cosmosActivityRepo.GetRecentActivitiesByProjectIdAsync(10, realProject.Id)).ToList();
                     methodPositiveRows["Activity.GetRecentActivitiesByProjectIdAsync"] = sqlProjActs.Count;
-                    checks.Add(ParityCompare.Lists($"B3.Activity.GetRecentActivitiesByProjectIdAsync({realProject.Id})", sqlProjActs, cosProjActs, null, true,
-                        ("ID", x => x.ID),
-                        ("ProjectId", x => x.ProjectId),
-                        ("PIDNumber", x => x.PIDNumber),
-                        ("VesselName", x => x.VesselName),
-                        ("Text", x => x.Text),
-                        ("CreateBy", x => x.CreateBy),
-                        ("CreateDttm", x => DateKey(x.CreateDttm))));
+                    // ORDER BY CreateDttm (CAP.Read_Activities_ByProjectId) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies($"B3.Activity.GetRecentActivitiesByProjectIdAsync({realProject.Id})", sqlProjActs, cosProjActs, x => x.CreateDttm, x => x.ID));
                 }
 
                 // B5: GetCap2Task (all columns)
@@ -9721,17 +9934,8 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Single($"B5.Task.GetCap2Task({realTask.Id})", sqlSingle, cosSingle,
-                            ("ID", x => x.ID),
-                            ("ProjectId", x => x.ProjectId),
-                            ("TaskId", x => x.TaskId),
-                            ("StatusId", x => x.StatusId),
-                            ("Task", x => x.Task),
-                            ("Status", x => x.Status),
-                            ("Notes", x => x.Notes),
-                            ("AssignedTo", x => x.AssignedTo),
-                            ("NumberOfComments", x => x.NumberOfComments),
-                            ("NumberOfAttachments", x => x.NumberOfAttachments)));
+                        // ORDER BY: n/a - single row (CAP.Read_Cap2Tasks_ByTaskId)
+                        checks.Add(ParityDeep.Single($"B5.Task.GetCap2Task({realTask.Id})", sqlSingle, cosSingle));
                     }
                 }
 
@@ -9741,16 +9945,8 @@ namespace DigitalCap.Server.DevTools
                     var sqlFiles = (await sqlFileStorageRepo.GetProjectFiles(realProject.Id)).ToList();
                     var cosFiles = (await cosmosFileStorageRepo.GetProjectFiles(realProject.Id)).ToList();
                     methodPositiveRows["FileStorage.GetProjectFiles"] = sqlFiles.Count;
-                    checks.Add(ParityCompare.Lists($"B7.FileStorage.GetProjectFiles({realProject.Id})", sqlFiles, cosFiles, x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("ProjectId", x => x.ProjectId),
-                        ("TaskId", x => x.TaskId),
-                        ("Name", x => x.Name),
-                        ("Extension", x => x.Extension),
-                        ("StorageKey", x => x.StorageKey),
-                        ("MimeType", x => x.MimeType),
-                        ("UploadedBy", x => x.UploadedBy),
-                        ("LastModifiedDate", x => DateKey(x.LastModifiedDate))));
+                    // ORDER BY: no (CAP.Read_Files_ByProjectId)
+                    checks.Add(ParityDeep.Lists($"B7.FileStorage.GetProjectFiles({realProject.Id})", sqlFiles, cosFiles, x => x.Id));
                 }
 
                 // B9: GetCommentsByProjectIdAsync (all columns)
@@ -9759,13 +9955,8 @@ namespace DigitalCap.Server.DevTools
                     var sqlComms = (await sqlCommentRepo.GetCommentsByProjectIdAsync(realProject.Id)).ToList();
                     var cosComms = (await cosmosCommentRepo.GetCommentsByProjectIdAsync(realProject.Id)).ToList();
                     methodPositiveRows["Comment.GetCommentsByProjectIdAsync"] = sqlComms.Count;
-                    checks.Add(ParityCompare.Lists($"B9.Comment.GetCommentsByProjectIdAsync({realProject.Id})", sqlComms, cosComms, x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("ProjectId", x => x.ProjectId),
-                        ("ProjectTaskId", x => x.ProjectTaskId),
-                        ("Comment", x => x.Comment),
-                        ("CreatedBy", x => x.CreatedBy),
-                        ("LastModifiedDate", x => DateKey(x.LastModifiedDate.UtcDateTime))));
+                    // ORDER BY: no (CAP.Read_Comments_By_Project_Id)
+                    checks.Add(ParityDeep.Lists($"B9.Comment.GetCommentsByProjectIdAsync({realProject.Id})", sqlComms, cosComms, x => x.Id));
                 }
 
                 // ==========================================
@@ -9776,22 +9967,13 @@ namespace DigitalCap.Server.DevTools
                     var sqlCapIdx = (await sqlCapRepo.GetCapIndexAsync()).ToList();
                     var cosCapIdx = (await cosmosCapRepo.GetCapIndexAsync()).ToList();
                     methodPositiveRows["Cap.GetCapIndexAsync"] = sqlCapIdx.Count;
-                    checks.Add(ParityCompare.Lists("C1_C3.Cap.GetCapIndexAsync", sqlCapIdx, cosCapIdx, x => x.ID, false,
-                        ("ID", x => x.ID),
-                        ("Name", x => x.Name),
-                        ("CapRegion", x => x.CapRegion),
-                        ("ProjectStatusName", x => x.ProjectStatusName),
-                        ("PIDNumber", x => x.PIDNumber),
-                        ("CompanyName", x => x.CompanyName),
-                        ("IMO", x => x.IMO),
-                        ("VesselName", x => x.VesselName),
-                        ("ProjectPriority", x => x.ProjectPriority),
-                        ("WCN", x => x.WCN)));
+                    // ORDER BY: no (CAP.Read_Project)
+                    checks.Add(ParityDeep.Lists("C1_C3.Cap.GetCapIndexAsync", sqlCapIdx, cosCapIdx, x => x.ID));
 
                     var sqlCertsCount = await sqlCapRepo.GetCertsCountAsync();
                     var cosCertsCount = await cosmosCapRepo.GetCertsCountAsync();
-                    checks.Add(ParityCompare.Single("C2.Cap.GetCertsCountAsync", sqlCertsCount, cosCertsCount,
-                        ("Count", x => x.Count)));
+                    // ORDER BY: n/a - single row (CAP.Get_Project_Certificates_Count)
+                    checks.Add(ParityDeep.Single("C2.Cap.GetCertsCountAsync", sqlCertsCount, cosCertsCount));
                 }
 
                 // V1, V2, V3: Vessel MainData (all 31 columns)
@@ -9807,74 +9989,16 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        checks.Add(ParityCompare.Lists($"V1_V2_V3.Vessel.GetVesselMainData({realProject.Id})", sqlMd, cosMd, null, false,
-                            ("projectId", x => x.projectId),
-                            ("vesselName", x => x.vesselName),
-                            ("imoNumber", x => x.imoNumber),
-                            ("yearBuilt", x => x.yearBuilt),
-                            ("builtBy", x => x.builtBy),
-                            ("length", x => x.length),
-                            ("breadth", x => x.breadth),
-                            ("depth", x => x.depth),
-                            ("draft", x => x.draft),
-                            ("grossTons", x => x.grossTons),
-                            ("netTons", x => x.netTons),
-                            ("deadweight", x => x.deadweight),
-                            ("vesselType", x => x.vesselType),
-                            ("callSign", x => x.callSign),
-                            ("officalNumber", x => x.officalNumber),
-                            ("homeport", x => x.homeport),
-                            ("previousName", x => x.previousName),
-                            ("ownerName", x => x.ownerName),
-                            ("manager", x => x.manager),
-                            ("hullNo", x => x.hullNo),
-                            ("propulsionType", x => x.propulsionType),
-                            ("kw", x => x.kw),
-                            ("propulsionManufacturer", x => x.propulsionManufacturer),
-                            ("gearManufacturer", x => x.gearManufacturer),
-                            ("classed", x => x.classed),
-                            ("classNotation", x => x.classNotation),
-                            ("machinery", x => x.machinery),
-                            ("other", x => x.other),
-                            ("environment", x => x.environment),
-                            ("selectedPrefix", x => x.selectedPrefix),
-                            ("firstVisitDate", x => x.firstVisitDate),
-                            ("lastVisitDate", x => x.lastVisitDate)));
+                        // ORDER BY: no (dbo.GetVesselMaindata)
+                        checks.Add(ParityDeep.Lists($"V1_V2_V3.Vessel.GetVesselMainData({realProject.Id})", sqlMd, cosMd, x => x.projectId));
                     }
 
                     // V11: StatutoryCertificate (all dates)
                     var sqlCert = await sqlVesselRepo.GetStatutoryCertificate(realProject.Id);
                     var cosCert = await cosmosVesselRepo.GetStatutoryCertificate(realProject.Id);
                     methodPositiveRows["Vessel.GetStatutoryCertificate"] = sqlCert != null ? 1 : 0;
-                    checks.Add(ParityCompare.Single($"V11.Vessel.GetStatutoryCertificate({realProject.Id})", sqlCert, cosCert,
-                        ("Exp_LLLI", x => DateKey(x?.StatutoryCertificatesExpirationDates?.LLLIDate)),
-                        ("Exp_SafetyCon", x => DateKey(x?.StatutoryCertificatesExpirationDates?.SafetyConDate)),
-                        ("Exp_SafetyRadio", x => DateKey(x?.StatutoryCertificatesExpirationDates?.SafetyRadioDate)),
-                        ("Exp_SafetyEquip", x => DateKey(x?.StatutoryCertificatesExpirationDates?.SafetyEquipmentDate)),
-                        ("Exp_IEE", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IEEDate)),
-                        ("Exp_IOPP", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IOPPDate)),
-                        ("Exp_IAP", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IAPDate)),
-                        ("Exp_IAFS", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IAFSDate)),
-                        ("Exp_ISPS", x => DateKey(x?.StatutoryCertificatesExpirationDates?.ISPSDate)),
-                        ("Exp_IBWM", x => DateKey(x?.StatutoryCertificatesExpirationDates?.IBWMDate)),
-                        ("Exp_ISPPSewage", x => DateKey(x?.StatutoryCertificatesExpirationDates?.ISPPSewageDate)),
-                        ("Exp_ISM", x => DateKey(x?.StatutoryCertificatesExpirationDates?.ISMDate)),
-                        ("Exp_MaritimeLabour", x => DateKey(x?.StatutoryCertificatesExpirationDates?.MaritimeLabourDate)),
-                        ("Exp_GasCarrierFitness", x => DateKey(x?.StatutoryCertificatesExpirationDates?.GasCarrierFitness)),
-                        ("Iss_LLLI", x => DateKey(x?.StatutoryCertificatesIssuedDates?.LLLIDate)),
-                        ("Iss_SafetyCon", x => DateKey(x?.StatutoryCertificatesIssuedDates?.SafetyConDate)),
-                        ("Iss_SafetyRadio", x => DateKey(x?.StatutoryCertificatesIssuedDates?.SafetyRadioDate)),
-                        ("Iss_SafetyEquip", x => DateKey(x?.StatutoryCertificatesIssuedDates?.SafetyEquipmentDate)),
-                        ("Iss_IEE", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IEEDate)),
-                        ("Iss_IOPP", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IOPPDate)),
-                        ("Iss_IAP", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IAPDate)),
-                        ("Iss_IAFS", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IAFSDate)),
-                        ("Iss_ISPS", x => DateKey(x?.StatutoryCertificatesIssuedDates?.ISPSDate)),
-                        ("Iss_IBWM", x => DateKey(x?.StatutoryCertificatesIssuedDates?.IBWMDate)),
-                        ("Iss_ISPPSewage", x => DateKey(x?.StatutoryCertificatesIssuedDates?.ISPPSewageDate)),
-                        ("Iss_ISM", x => DateKey(x?.StatutoryCertificatesIssuedDates?.ISMDate)),
-                        ("Iss_MaritimeLabour", x => DateKey(x?.StatutoryCertificatesIssuedDates?.MaritimeLabourDate)),
-                        ("Iss_GasCarrierFitness", x => DateKey(x?.StatutoryCertificatesIssuedDates?.GasCarrierFitness))));
+                    // ORDER BY: n/a - single row (dbo.GetStatutoryCertificates)
+                    checks.Add(ParityDeep.Single($"V11.Vessel.GetStatutoryCertificate({realProject.Id})", sqlCert, cosCert));
                 }
 
                 // V16: Details (char(7), S2 match, S3, all columns)
@@ -9884,21 +10008,19 @@ namespace DigitalCap.Server.DevTools
                     var sqlDet = await sqlVesselRepo.Details(imoStr);
                     var cosDet = await cosmosVesselRepo.Details(imoStr);
                     methodPositiveRows["Vessel.Details"] = sqlDet != null ? 1 : 0;
-                    checks.Add(ParityCompare.Single($"V16.Vessel.Details({imoStr})", sqlDet, cosDet,
-                        ("Vessel_ID", x => x.Vessel_ID),
-                        ("IMONum", x => x.IMONum),
-                        ("VesselName", x => x.VesselName),
-                        ("HullNum", x => x.HullNum),
-                        ("Builder", x => x.Builder),
-                        ("DWT", x => x.DWT),
-                        ("GT", x => x.GT),
-                        ("NetTonnage", x => x.NetTonnage),
-                        ("Length", x => x.Length),
-                        ("Breadth", x => x.Breadth),
-                        ("Depth", x => x.Depth),
-                        ("CallSign", x => x.CallSign),
-                        ("FlagName", x => x.FlagName),
-                        ("VesselType", x => x.VesselType)));
+                    // ORDER BY: n/a - single row (dbo.GetVesselDetailsByIMO)
+                    checks.Add(ParityDeep.Single($"V16.Vessel.Details({imoStr})", sqlDet, cosDet));
+
+                    // 3d: V16 Details long IMO and trailing spaces
+                    var sqlDetLong = await sqlVesselRepo.Details(imoStr + "99");
+                    var cosDetLong = await cosmosVesselRepo.Details(imoStr + "99");
+                    // ORDER BY: n/a - single row (dbo.GetVesselDetailsByIMO)
+                    checks.Add(ParityDeep.Single($"V16.Vessel.Details.LongIMO({imoStr + "99"})", sqlDetLong, cosDetLong, bothNullAllowed: true));
+
+                    var sqlDetSpaces = await sqlVesselRepo.Details(imoStr + "   ");
+                    var cosDetSpaces = await cosmosVesselRepo.Details(imoStr + "   ");
+                    // ORDER BY: n/a - single row (dbo.GetVesselDetailsByIMO)
+                    checks.Add(ParityDeep.Single($"V16.Vessel.Details.TrailingSpaces({imoStr})", sqlDetSpaces, cosDetSpaces, bothNullAllowed: true));
                 }
 
                 // ==========================================
@@ -9910,30 +10032,15 @@ namespace DigitalCap.Server.DevTools
                     var sqlProj = await sqlProjectRepo.GetProject(realProject.Id);
                     var cosProj = await cosmosProjectRepo.GetProject(realProject.Id);
                     methodPositiveRows["Project.GetProject"] = sqlProj != null ? 1 : 0;
-                    checks.Add(ParityCompare.Single($"P5_P14.Project.GetProject({realProject.Id})", sqlProj, cosProj,
-                        ("Id", x => x.Id),
-                        ("Name", x => x.Name),
-                        ("IMO", x => x.IMO),
-                        ("PIDNumber", x => x.PIDNumber),
-                        ("VesselType", x => x.VesselType),
-                        ("ShipType", x => x.ShipType),
-                        ("LeadSurveyor", x => x.LeadSurveyor),
-                        ("SecondSurveyor", x => x.SecondSurveyor),
-                        ("CapRegion", x => x.CapRegion),
-                        ("ProjectStatus", x => x.ProjectStatus),
-                        ("ClientProfileId", x => x.ClientProfileId),
-                        ("PercentComplete", x => x.PercentComplete),
-                        ("CreatedDate", x => DateKey(x.CreatedDate)),
-                        ("CreatedBy", x => x.CreatedBy)));
+                    // ORDER BY: n/a - single row (CAP.Read_Project_ById)
+                    checks.Add(ParityDeep.Single($"P5_P14.Project.GetProject({realProject.Id})", sqlProj, cosProj));
 
                     // P2 (T-i): GetProjectCountGroupedByClientIdAsync (all columns)
                     var sqlProjCount = (await sqlProjectRepo.GetProjectCountGroupedByClientIdAsync()).ToList();
                     var cosProjCount = (await cosmosProjectRepo.GetProjectCountGroupedByClientIdAsync()).ToList();
                     methodPositiveRows["Project.GetProjectCountGroupedByClientIdAsync"] = sqlProjCount.Count;
-                    checks.Add(ParityCompare.Lists("P2.Project.GetProjectCountGroupedByClientIdAsync", sqlProjCount, cosProjCount, x => x.ClientId, false,
-                        ("ClientId", x => x.ClientId),
-                        ("ClientName", x => x.ClientName),
-                        ("ProjectCount", x => x.ProjectCount)));
+                    // ORDER BY: no (CAP.Read_Project_Count_Grouped_ByClientId)
+                    checks.Add(ParityDeep.Lists("P2.Project.GetProjectCountGroupedByClientIdAsync", sqlProjCount, cosProjCount, x => x.ClientId));
 
                     // P8: Lookups and missing
                     var sqlPn = await sqlProjectRepo.GetProjectName(realProject.Id);
@@ -9964,35 +10071,34 @@ namespace DigitalCap.Server.DevTools
                     var sqlDet = (await sqlProjectRepo.GetDetails(realProject.Id)).ToList();
                     var cosDet = (await cosmosProjectRepo.GetDetails(realProject.Id)).ToList();
                     methodPositiveRows["Project.GetDetails"] = sqlDet.Count;
-                    checks.Add(ParityCompare.Lists($"P4.Project.GetDetails({realProject.Id})", sqlDet, cosDet, x => x.Name, false,
-                        ("Name", x => x.Name),
-                        ("Type", x => x.Type),
-                        ("LastModifiedDate", x => DateKey(x.LastModifiedDate))));
+                    // ORDER BY: yes (CAP.Read_Project_Details)
+                    checks.Add(ParityDeep.ListsOrdered($"P4.Project.GetDetails({realProject.Id})", sqlDet, cosDet));
 
                     // P6, P7, P18: GetSummary (all columns)
                     var sqlSum = await sqlProjectRepo.GetSummary(realProject.Id);
                     var cosSum = await cosmosProjectRepo.GetSummary(realProject.Id);
                     methodPositiveRows["Project.GetSummary"] = sqlSum != null ? 1 : 0;
-                    checks.Add(ParityCompare.Single($"P6_P7_P18.Project.GetSummary({realProject.Id})", sqlSum, cosSum,
-                        ("ID", x => x.ID),
-                        ("Name", x => x.Name),
-                        ("ProjectId", x => x.ProjectId),
-                        ("IMO", x => x.IMO),
-                        ("PIDNumber", x => x.PIDNumber),
-                        ("VesselName", x => x.VesselName),
-                        ("ShipType", x => x.ShipType),
-                        ("CapRegion", x => x.CapRegion),
-                        ("YearBuilt", x => x.YearBuilt),
-                        ("AgreementOwner", x => x.AgreementOwner),
-                        ("AgreementNumber", x => x.AgreementNumber),
-                        ("ProjectComments", x => x.ProjectComments),
-                        ("AreTechnicalTasksComplete", x => x.AreTechnicalTasksComplete),
-                        ("AreInvoiceTasksComplete", x => x.AreInvoiceTasksComplete),
-                        ("TechnicalTasksCompletionPercentage", x => x.TechnicalTasksCompletionPercentage),
-                        ("InvoiceTasksCompletionPercentage", x => x.InvoiceTasksCompletionPercentage),
-                        ("ProjectPriority", x => x.ProjectPriority),
-                        ("TechnicalDaysWorked", x => x.TechnicalDaysWorked),
-                        ("InvoiceDaysWorked", x => x.InvoiceDaysWorked)));
+                    // ORDER BY: n/a - single row (CAP.Read_ProjectSummary_ById)
+                    checks.Add(ParityDeep.Single($"P6_P7_P18.Project.GetSummary({realProject.Id})", sqlSum, cosSum));
+                }
+
+                // 3d: Project with VesselName IS NULL
+                if (nullVesselProjId.HasValue && nullVesselProjId.Value != 0)
+                {
+                    var sqlP5Null = await sqlProjectRepo.GetProject(nullVesselProjId.Value);
+                    var cosP5Null = await cosmosProjectRepo.GetProject(nullVesselProjId.Value);
+                    // ORDER BY: n/a - single row (CAP.Read_Project_ById)
+                    checks.Add(ParityDeep.Single($"P5.Project.GetProject.NullVesselName({nullVesselProjId.Value})", sqlP5Null, cosP5Null));
+
+                    var sqlB2Null = (await sqlActivityRepo.GetRecentActivitiesByProjectIdAsync(10, nullVesselProjId.Value)).ToList();
+                    var cosB2Null = (await cosmosActivityRepo.GetRecentActivitiesByProjectIdAsync(10, nullVesselProjId.Value)).ToList();
+                    // ORDER BY CreateDttm (CAP.Read_Activities_ByProjectId) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies($"B2.Activity.GetRecentActivities.NullVesselName({nullVesselProjId.Value})", sqlB2Null, cosB2Null, x => x.CreateDttm, x => x.ID, bothEmptyAllowed: true));
+                }
+                else
+                {
+                    checks.Add(new { check = "3d.NullVesselNameProject", equal = false, error = "no data" });
+                    allPassed = false;
                 }
 
                 // P3, P9, P10, P15, P17: Grids, Export and Stats (all columns)
@@ -10000,44 +10106,20 @@ namespace DigitalCap.Server.DevTools
                     var sqlGrid = (await sqlProjectRepo.GetAllProjectsGridData()).ToList();
                     var cosGrid = (await cosmosProjectRepo.GetAllProjectsGridData()).ToList();
                     methodPositiveRows["Project.GetAllProjectsGridData"] = sqlGrid.Count;
-                    checks.Add(ParityCompare.Lists("P9_P10.Project.GetAllProjectsGridData", sqlGrid, cosGrid, x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("PIDNumber", x => x.PIDNumber),
-                        ("CompanyName", x => x.CompanyName),
-                        ("CapRegion", x => x.CapRegion),
-                        ("VesselName", x => x.VesselName),
-                        ("IMO", x => x.IMO),
-                        ("WCN", x => x.WCN),
-                        ("ProjectPriority", x => x.ProjectPriority),
-                        ("PercentComplete", x => x.PercentComplete)));
+                    // ORDER BY: no (CAP.Read_Projects_Grid)
+                    checks.Add(ParityDeep.Lists("P9_P10.Project.GetAllProjectsGridData", sqlGrid, cosGrid, x => x.Id));
 
                     var sqlExport = await sqlProjectRepo.GetAllProjectsGridExport();
                     var cosExport = await cosmosProjectRepo.GetAllProjectsGridExport();
                     methodPositiveRows["Project.GetAllProjectsGridExport"] = sqlExport.Count;
-                    checks.Add(ParityCompare.Lists("P3.Project.GetAllProjectsGridExport", sqlExport, cosExport, x => x.ID, false,
-                        ("ID", x => x.ID),
-                        ("Name", x => x.Name),
-                        ("PIDNumber", x => x.PIDNumber),
-                        ("CapRegion", x => x.CapRegion),
-                        ("CapScope", x => x.CapScope),
-                        ("ProjectStatus", x => x.ProjectStatus),
-                        ("ProjectPriority", x => x.ProjectPriority),
-                        ("SpecialHull", x => x.SpecialHull),
-                        ("Fatigue", x => x.Fatigue)));
+                    // ORDER BY: no (CAP.Read_Projects_Grid_Export)
+                    checks.Add(ParityDeep.Lists("P3.Project.GetAllProjectsGridExport", sqlExport, cosExport, x => x.ID));
 
                     var sqlStats = await sqlProjectRepo.GetProjectStats();
                     var cosStats = await cosmosProjectRepo.GetProjectStats();
                     methodPositiveRows["Project.GetProjectStats"] = sqlStats != null ? 1 : 0;
-                    bool eqStats = sqlStats != null && cosStats != null
-                        && sqlStats.Total == cosStats.Total
-                        && sqlStats.Online == cosStats.Online
-                        && sqlStats.Offline == cosStats.Offline
-                        && sqlStats.Regions.Count == cosStats.Regions.Count
-                        && sqlStats.Regions.All(kv => cosStats.Regions.TryGetValue(kv.Key, out var v) && v == kv.Value)
-                        && sqlStats.Statuses.Count == cosStats.Statuses.Count
-                        && sqlStats.Statuses.All(kv => cosStats.Statuses.TryGetValue(kv.Key, out var v) && v == kv.Value);
-                    checks.Add(new { check = "P10_P15_P17.Project.GetProjectStats", equal = eqStats, sqlTotal = sqlStats?.Total, cosmosTotal = cosStats?.Total });
-                    if (!eqStats) allPassed = false;
+                    // ORDER BY: n/a - single row (CAP.Get_Projects_Stats)
+                    checks.Add(ParityDeep.Single("P10_P15_P17.Project.GetProjectStats", sqlStats, cosStats));
                 }
 
                 // ==========================================
@@ -10048,31 +10130,19 @@ namespace DigitalCap.Server.DevTools
                     var sqlTemplates = await sqlDescRepo.GetGradingTemplates();
                     var cosTemplates = await cosmosDescRepo.GetGradingTemplates();
                     methodPositiveRows["Description.GetGradingTemplates"] = sqlTemplates.Count;
-                    checks.Add(ParityCompare.Lists("D7.Description.GetGradingTemplates", sqlTemplates, cosTemplates, x => x.TemplateId, false,
-                        ("TemplateId", x => x.TemplateId),
-                        ("TemplateName", x => x.TemplateName)));
+                    // ORDER BY: no (dbo.GetGradingTemplate)
+                    checks.Add(ParityDeep.Lists("D7.Description.GetGradingTemplates", sqlTemplates, cosTemplates, x => x.TemplateId));
 
                     // D3 (T-e): GetAllDescription (all columns)
-                    var sqlDescAll = await sqlDescRepo.GetAllDescription(1, 10);
-                    var cosDescAll = await cosmosDescRepo.GetAllDescription(1, 10);
+                    var sqlDescAll = await sqlDescRepo.GetAllDescription(1, 100000);
+                    var cosDescAll = await cosmosDescRepo.GetAllDescription(1, 100000);
                     methodPositiveRows["Description.GetAllDescription"] = sqlDescAll?.Data?.Count ?? 0;
                     bool eqPaging = sqlDescAll != null && cosDescAll != null && sqlDescAll.Total == cosDescAll.Total;
                     checks.Add(new { check = "D3.Description.GetAllDescription.Paging", equal = eqPaging, sqlTotal = sqlDescAll?.Total, cosmosTotal = cosDescAll?.Total });
                     if (!eqPaging) allPassed = false;
 
-                    checks.Add(ParityCompare.Lists("D3.Description.GetAllDescription.Data", sqlDescAll?.Data ?? new List<ImageDescriptions>(), cosDescAll?.Data ?? new List<ImageDescriptions>(), x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("Description", x => x.Description),
-                        ("CategoryId", x => x.CategoryId),
-                        ("ProjectId", x => x.ProjectId),
-                        ("VesselType", x => x.VesselType),
-                        ("TemplateId", x => x.TemplateId),
-                        ("TemplateName", x => x.TemplateName),
-                        ("IsActive", x => x.IsActive),
-                        ("IsDeleted", x => x.IsDeleted),
-                        ("SectionId", x => x.SectionId),
-                        ("SectionName", x => x.SectionName),
-                        ("TankTypeId", x => x.TankTypeId)));
+                    // ORDER BY SequenceNo, Id (dbo.GetAllDescriptions) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies("D3.Description.GetAllDescription.Data", sqlDescAll?.Data, cosDescAll?.Data, x => x.Id, x => (x.SectionId, x.TankTypeId, x.SectionName)));
 
                     // D2, D7b (T-e): GetImageDescriptionsByProjectId
                     if (realProject.Id != 0)
@@ -10080,85 +10150,81 @@ namespace DigitalCap.Server.DevTools
                         var sqlImgDesc = await sqlDescRepo.GetImageDescriptionsByProjectId(realProject.Id);
                         var cosImgDesc = await cosmosDescRepo.GetImageDescriptionsByProjectId(realProject.Id);
                         methodPositiveRows["Description.GetImageDescriptionsByProjectId"] = sqlImgDesc.Count;
-                        checks.Add(ParityCompare.Lists($"D2_D7b.Description.GetImageDescriptionsByProjectId({realProject.Id})", sqlImgDesc, cosImgDesc, x => x.Id, false,
-                            ("Id", x => x.Id),
-                            ("Description", x => x.Description),
-                            ("CategoryId", x => x.CategoryId),
-                            ("ProjectId", x => x.ProjectId),
-                            ("VesselType", x => x.VesselType),
-                            ("TemplateId", x => x.TemplateId),
-                            ("TemplateName", x => x.TemplateName),
-                            ("IsActive", x => x.IsActive),
-                            ("IsDeleted", x => x.IsDeleted),
-                            ("SectionId", x => x.SectionId),
-                            ("SectionName", x => x.SectionName),
-                            ("TankTypeId", x => x.TankTypeId)));
+                        // ORDER BY: yes (dbo.GetImageDescriptionsByProjectId)
+                        checks.Add(ParityDeep.ListsOrdered($"D2_D7b.Description.GetImageDescriptionsByProjectId({realProject.Id})", sqlImgDesc, cosImgDesc));
                     }
 
                     // D4 (T-e): CheckImageDescriptionExistsOrNot (real and null)
                     var sqlNullDesc = (await sqlDescRepo.CheckImageDescriptionExistsOrNot(null!, null!, null!, null!)).ToList();
                     var cosNullDesc = (await cosmosDescRepo.CheckImageDescriptionExistsOrNot(null!, null!, null!, null!)).ToList();
-                    bool eqNullDesc = sqlNullDesc.Count == 0 && cosNullDesc.Count == 0;
-                    checks.Add(new { check = "D4.Description.CheckImageDescriptionExistsOrNot.NullParams", equal = eqNullDesc, sqlCount = sqlNullDesc.Count, cosCount = cosNullDesc.Count });
-                    if (!eqNullDesc) allPassed = false;
+                    // ORDER BY: no (Config.CheckImageDescriptionExistsOrNot)
+                    checks.Add(ParityDeep.Lists("D4.Description.CheckImageDescriptionExistsOrNot.NullParams", sqlNullDesc, cosNullDesc, x => x.Id, bothEmptyAllowed: true));
 
-                    // D1, D5 (T-e / T-i): GetDescriptionSectionNamesByTemplateNameAndVesselType
-                    var sqlDescSecs = await sqlDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(realTemplate.TemplateName, realVesselType);
-                    var cosDescSecs = await cosmosDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(realTemplate.TemplateName, realVesselType);
-                    methodPositiveRows["Description.GetDescriptionSectionNamesByTemplateNameAndVesselType"] = sqlDescSecs.Count;
-                    checks.Add(ParityCompare.Lists($"D1.Description.GetDescriptionSectionNames({realTemplate.TemplateName}, {realVesselType})", sqlDescSecs, cosDescSecs, x => x.SectionId, false,
-                        ("SectionId", x => x.SectionId),
-                        ("SectionName", x => x.SectionName)));
+                    if (realImgDesc.Description != null)
+                    {
+                        var sqlRealDesc = (await sqlDescRepo.CheckImageDescriptionExistsOrNot(realImgDesc.VesselType, realImgDesc.SectionName, realImgDesc.PartName, realImgDesc.Description)).ToList();
+                        var cosRealDesc = (await cosmosDescRepo.CheckImageDescriptionExistsOrNot(realImgDesc.VesselType, realImgDesc.SectionName, realImgDesc.PartName, realImgDesc.Description)).ToList();
+                        // ORDER BY: no (Config.CheckImageDescriptionExistsOrNot)
+                        checks.Add(ParityDeep.Lists("D4.Description.CheckImageDescriptionExistsOrNot.Real", sqlRealDesc, cosRealDesc, x => x.Id));
+                    }
 
-                    var sqlNullSec = await sqlDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(null!, realVesselType);
-                    var cosNullSec = await cosmosDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(null!, realVesselType);
-                    bool eqNullSec = sqlNullSec.Count == 0 && cosNullSec.Count == 0;
-                    checks.Add(new { check = "D5.Description.GetDescriptionSectionNames.NullTemplateName", equal = eqNullSec, sqlCount = sqlNullSec.Count, cosCount = cosNullSec.Count });
-                    if (!eqNullSec) allPassed = false;
+                    // GetDescriptionSectionNamesByTemplateNameAndVesselType
+                    if (realTemplate.TemplateName != null && realVesselType != null)
+                    {
+                        var sqlDescSecs = await sqlDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(realTemplate.TemplateName, realVesselType);
+                        var cosDescSecs = await cosmosDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(realTemplate.TemplateName, realVesselType);
+                        methodPositiveRows["Description.GetDescriptionSectionNamesByTemplateNameAndVesselType"] = sqlDescSecs.Count;
+                        // ORDER BY [Order] (not returned) – compared as a set
+                        checks.Add(ParityDeep.ListsOrderedWithTies($"Description.GetDescriptionSectionNames({realTemplate.TemplateName}, {realVesselType})", sqlDescSecs, cosDescSecs, x => 0, x => (x.SectionId, x.TanktypeId, x.SectionName)));
+                    }
+
+                    if (realVesselType != null)
+                    {
+                        var sqlNullSec = await sqlDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(null!, realVesselType);
+                        var cosNullSec = await cosmosDescRepo.GetDescriptionSectionNamesByTemplateNameAndVesselType(null!, realVesselType);
+                        // ORDER BY [Order] (not returned) – compared as a set
+                        checks.Add(ParityDeep.ListsOrderedWithTies("Description.GetDescriptionSectionNames.NullTemplateName", sqlNullSec, cosNullSec, x => 0, x => (x.SectionId, x.TanktypeId, x.SectionName), bothEmptyAllowed: true));
+                    }
 
                     // D6 (T-i): GetGradingSections
-                    var sqlDescGradSec = await sqlDescRepo.GetGradingSections(realTemplate.TemplateId, realVesselType);
-                    var cosDescGradSec = await cosmosDescRepo.GetGradingSections(realTemplate.TemplateId, realVesselType);
-                    methodPositiveRows["Description.GetGradingSections"] = sqlDescGradSec.Count;
-                    checks.Add(ParityCompare.Lists($"D6.Description.GetGradingSections({realTemplate.TemplateId}, {realVesselType})", sqlDescGradSec, cosDescGradSec, x => x.SectionId, false,
-                        ("SectionId", x => x.SectionId),
-                        ("SectionName", x => x.SectionName)));
+                    if (realGradingTemplateId != 0 && realVesselType != null)
+                    {
+                        var sqlDescGradSec = await sqlDescRepo.GetGradingSections(realGradingTemplateId, realVesselType);
+                        var cosDescGradSec = await cosmosDescRepo.GetGradingSections(realGradingTemplateId, realVesselType);
+                        methodPositiveRows["Description.GetGradingSections"] = sqlDescGradSec.Count;
+                        // ORDER BY sections.TemplateId (dbo.GetGradingSections) – ties possible
+                        checks.Add(ParityDeep.ListsOrderedWithTies($"D6.Description.GetGradingSections({realGradingTemplateId}, {realVesselType})", sqlDescGradSec, cosDescGradSec, x => x.TemplateId, x => (x.SectionId, x.TanktypeId, x.SectionName)));
+                    }
                 }
 
                 // E1 & D8: Export Part Configuration (all columns)
+                if (realPartMapping.VesselTypeId != 0)
                 {
-                    var sqlExportParts = await sqlExportRepo.GetVesselTypeExportPartConfiguration(1);
-                    var cosExportParts = await cosmosExportRepo.GetVesselTypeExportPartConfiguration(1);
+                    var sqlExportParts = await sqlExportRepo.GetVesselTypeExportPartConfiguration(realPartMapping.VesselTypeId);
+                    var cosExportParts = await cosmosExportRepo.GetVesselTypeExportPartConfiguration(realPartMapping.VesselTypeId);
                     methodPositiveRows["Export.GetVesselTypeExportPartConfiguration"] = sqlExportParts.Count;
-                    checks.Add(ParityCompare.Lists("E1_D8.Export.GetVesselTypeExportPartConfiguration(1)", sqlExportParts, cosExportParts, x => x.PartId, false,
-                        ("PartId", x => x.PartId),
-                        ("PartName", x => x.PartName)));
+                    // ORDER BY SequenceNo (Config.GetVesselTypeExportConfigForParts) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies($"E1_D8.Export.GetVesselTypeExportPartConfiguration({realPartMapping.VesselTypeId})", sqlExportParts, cosExportParts, x => 0, x => x.PartId));
                 }
 
                 // ==========================================
                 // 6. Group 6 (Batches 7-8) Read Checks
                 // ==========================================
                 // G1, T5: Grading
-                if (realVesselType != null)
+                if (realGradingTemplateId != 0 && realVesselType != null)
                 {
-                    var sqlGradSec = await sqlGradingRepo.GetGradingSections(1, realVesselType + "   ");
-                    var cosGradSec = await cosmosGradingRepo.GetGradingSections(1, realVesselType + "   ");
+                    var sqlGradSec = await sqlGradingRepo.GetGradingSections(realGradingTemplateId, realVesselType + "   ");
+                    var cosGradSec = await cosmosGradingRepo.GetGradingSections(realGradingTemplateId, realVesselType + "   ");
                     methodPositiveRows["Grading.GetGradingSections"] = sqlGradSec.Count;
-                    checks.Add(ParityCompare.Lists($"G1_T5.Grading.GetGradingSections.TrailingSpaces({realVesselType})", sqlGradSec, cosGradSec, x => x.SectionId, false,
-                        ("SectionId", x => x.SectionId),
-                        ("SectionName", x => x.SectionName)));
+                    // ORDER BY sections.TemplateId (dbo.GetGradingSections) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies($"G1_T5.Grading.GetGradingSections.TrailingSpaces({realVesselType})", sqlGradSec, cosGradSec, x => x.TemplateId, x => (x.SectionId, x.TanktypeId, x.SectionName)));
 
                     // T1 place 4: GetTanks_VesselByVesselType (trailing spaces sent to BOTH sides)
                     var sqlTanksVt = await sqlTankRepo.GetTanks_VesselByVesselType(realVesselType + "   ");
                     var cosTanksVt = await cosmosTankRepo.GetTanks_VesselByVesselType(realVesselType + "   ");
                     methodPositiveRows["Tank.GetTanks_VesselByVesselType"] = sqlTanksVt.Count;
-                    checks.Add(ParityCompare.Lists($"T1_P4.Tank.GetTanks_VesselByVesselType.TrailingSpaces({realVesselType})", sqlTanksVt, cosTanksVt, x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("VesselType", x => x.VesselType),
-                        ("TankTypeId", x => x.TankTypeId),
-                        ("TankName", x => x.TankName),
-                        ("CreatedDttm", x => DateKey(x.CreatedDttm)),
-                        ("UpdateDttm", x => DateKey(x.UpdateDttm))));
+                    // ORDER BY: no (dbo.Get_Vessel_Tank_ByVesselType)
+                    checks.Add(ParityDeep.Lists($"T1_P4.Tank.GetTanks_VesselByVesselType.TrailingSpaces({realVesselType})", sqlTanksVt, cosTanksVt, x => x.Id));
                 }
 
                 if (realProject.Imo.HasValue && realProject.Imo.Value > 0)
@@ -10168,14 +10234,8 @@ namespace DigitalCap.Server.DevTools
                     var sqlTanksImo = await sqlTankRepo.GetTanks_VesselByIMO(imoStr + "   ");
                     var cosTanksImo = await cosmosTankRepo.GetTanks_VesselByIMO(imoStr + "   ");
                     methodPositiveRows["Tank.GetTanks_VesselByIMO"] = sqlTanksImo.Count;
-                    checks.Add(ParityCompare.Lists($"T1_P1.Tank.GetTanks_VesselByIMO.TrailingSpaces({imoStr})", sqlTanksImo, cosTanksImo, x => x.Id, false,
-                        ("Id", x => x.Id),
-                        ("ImoNumber", x => x.ImoNumber),
-                        ("ProjectId", x => x.ProjectId),
-                        ("TankTypeId", x => x.TankTypeId),
-                        ("TankName", x => x.TankName),
-                        ("CreatedDttm", x => DateKey(x.CreatedDttm)),
-                        ("UpdateDttm", x => DateKey(x.UpdateDttm))));
+                    // ORDER BY: no (dbo.Get_Vessel_Tank_ByIMONumber)
+                    checks.Add(ParityDeep.Lists($"T1_P1.Tank.GetTanks_VesselByIMO.TrailingSpaces({imoStr})", sqlTanksImo, cosTanksImo, x => x.Id));
 
                     if (realProject.Id != 0)
                     {
@@ -10183,65 +10243,44 @@ namespace DigitalCap.Server.DevTools
                         var sqlTanksProj = await sqlTankRepo.GetTanks_VesselByProject(imoStr + "   ", realProject.Id);
                         var cosTanksProj = await cosmosTankRepo.GetTanks_VesselByProject(imoStr + "   ", realProject.Id);
                         methodPositiveRows["Tank.GetTanks_VesselByProject"] = sqlTanksProj.Count;
-                        checks.Add(ParityCompare.Lists($"T1_P2.Tank.GetTanks_VesselByProject({imoStr}, {realProject.Id})", sqlTanksProj, cosTanksProj, x => x.Id, false,
-                            ("Id", x => x.Id),
-                            ("ImoNumber", x => x.ImoNumber),
-                            ("ProjectId", x => x.ProjectId),
-                            ("TankTypeId", x => x.TankTypeId),
-                            ("TankName", x => x.TankName),
-                            ("CreatedDttm", x => DateKey(x.CreatedDttm)),
-                            ("UpdateDttm", x => DateKey(x.UpdateDttm))));
+                        // ORDER BY TankTypeId, TankName, CreatedDttm (dbo.Get_Vessel_Tank_ByProject) – ties possible
+                        checks.Add(ParityDeep.ListsOrderedWithTies($"T1_P2.Tank.GetTanks_VesselByProject({imoStr}, {realProject.Id})", sqlTanksProj, cosTanksProj, x => (x.TankTypeId, x.TankName, x.CreatedDttm), x => x.Id));
 
                         // T1 place 3: GetTemplateTanks (trailing spaces sent to BOTH sides)
                         var sqlTanksTmpl = await sqlTankRepo.GetTemplateTanks(realTemplate.TemplateId, imoStr + "   ", realVesselType, realProject.Id);
                         var cosTanksTmpl = await cosmosTankRepo.GetTemplateTanks(realTemplate.TemplateId, imoStr + "   ", realVesselType, realProject.Id);
                         methodPositiveRows["Tank.GetTemplateTanks"] = sqlTanksTmpl.Count;
-                        checks.Add(ParityCompare.Lists($"T1_P3.Tank.GetTemplateTanks({imoStr})", sqlTanksTmpl, cosTanksTmpl, x => x.Id, false,
-                            ("Id", x => x.Id),
-                            ("TankName", x => x.TankName),
-                            ("TankTypeId", x => x.TankTypeId),
-                            ("Subheader", x => x.Subheader)));
+                        // ORDER BY TankTypeId, TankName (dbo.GetTempaleTanks) – ties possible
+                        checks.Add(ParityDeep.ListsOrderedWithTies($"T1_P3.Tank.GetTemplateTanks({imoStr})", sqlTanksTmpl, cosTanksTmpl, x => (x.TankTypeId, x.TankName), x => x.Id));
                     }
 
-                    // T1 place 4: GetProjectNames (trailing spaces sent to BOTH sides)
+                    // T1 place 5 (renamed duplicate T1_P4): GetProjectNames (trailing spaces sent to BOTH sides)
                     var sqlProjNames = await sqlTankRepo.GetProjectNames(imoStr + "   ");
                     var cosProjNames = await cosmosTankRepo.GetProjectNames(imoStr + "   ");
                     methodPositiveRows["Tank.GetProjectNames"] = sqlProjNames.Count;
-                    checks.Add(ParityCompare.Lists($"T1_P4.Tank.GetProjectNames({imoStr})", sqlProjNames, cosProjNames, x => x.ProjectId, false,
-                        ("Text", x => x.Text),
-                        ("Value", x => x.Value),
-                        ("ProjectId", x => x.ProjectId)));
+                    // ORDER BY IMO (CAP.GET_PROJECTNAME_BYIMO) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies($"T1_P5.Tank.GetProjectNames({imoStr})", sqlProjNames, cosProjNames, x => x.Value, x => x.ProjectId));
                 }
 
                 // R1 & R2: ReportPart (all columns, real and null)
+                if (realPartMapping.VesselTypeId != 0 && realPartMapping.PartName != null)
                 {
-                    var sqlSecNames = await sqlReportPartRepo.GetSectionNamesByPartNameAsync(1, "HULL");
-                    var cosSecNames = await cosmosReportPartRepo.GetSectionNamesByPartNameAsync(1, "HULL");
+                    var sqlSecNames = await sqlReportPartRepo.GetSectionNamesByPartNameAsync(realPartMapping.VesselTypeId, realPartMapping.PartName);
+                    var cosSecNames = await cosmosReportPartRepo.GetSectionNamesByPartNameAsync(realPartMapping.VesselTypeId, realPartMapping.PartName);
                     methodPositiveRows["ReportPart.GetSectionNamesByPartNameAsync"] = sqlSecNames.NormalSections?.Count ?? 0;
-                    checks.Add(ParityCompare.Lists("R1.ReportPart.GetSectionNamesByPartNameAsync.Normal", sqlSecNames.NormalSections ?? new List<NormalSectionNames>(), cosSecNames.NormalSections ?? new List<NormalSectionNames>(), x => x.SectionId, false,
-                        ("SectionId", x => x.SectionId),
-                        ("SectionName", x => x.SectionName),
-                        ("PartId", x => x.PartId),
-                        ("PartName", x => x.PartName),
-                        ("VesselTypeId", x => x.VesselTypeId),
-                        ("SubHeader", x => x.SubHeader),
-                        ("TotalCards", x => x.TotalCards),
-                        ("PlaceholderCount", x => x.PlaceholderCount),
-                        ("FileNameCount", x => x.FileNameCount),
-                        ("IsActive", x => x.IsActive)));
+                    // ORDER BY: no (Config.Get_SectionNamesByPartName)
+                    checks.Add(ParityDeep.Lists($"R1.ReportPart.GetSectionNamesByPartNameAsync.Normal({realPartMapping.VesselTypeId}, {realPartMapping.PartName})", sqlSecNames.NormalSections, cosSecNames.NormalSections, x => x.SectionId));
 
-                    var sqlSecNamesNull = await sqlReportPartRepo.GetSectionNamesByPartNameAsync(1, null!);
-                    var cosSecNamesNull = await cosmosReportPartRepo.GetSectionNamesByPartNameAsync(1, null!);
-                    bool eqR1Null = (sqlSecNamesNull.NormalSections?.Count ?? 0) == 0 && (cosSecNamesNull.NormalSections?.Count ?? 0) == 0;
-                    checks.Add(new { check = "R1.ReportPart.GetSectionNamesByPartNameAsync.NullPartName", equal = eqR1Null, sqlCount = sqlSecNamesNull.NormalSections?.Count ?? 0, cosCount = cosSecNamesNull.NormalSections?.Count ?? 0 });
-                    if (!eqR1Null) allPassed = false;
+                    var sqlSecNamesNull = await sqlReportPartRepo.GetSectionNamesByPartNameAsync(realPartMapping.VesselTypeId, null!);
+                    var cosSecNamesNull = await cosmosReportPartRepo.GetSectionNamesByPartNameAsync(realPartMapping.VesselTypeId, null!);
+                    // ORDER BY: no (Config.Get_SectionNamesByPartName)
+                    checks.Add(ParityDeep.Lists($"R1.ReportPart.GetSectionNamesByPartNameAsync.NullPartName({realPartMapping.VesselTypeId})", sqlSecNamesNull.NormalSections, cosSecNamesNull.NormalSections, x => x.SectionId, bothEmptyAllowed: true));
 
-                    var sqlExportSec = await sqlReportPartRepo.GetVesselTypeExportSectionConfiguration(1, 1);
-                    var cosExportSec = await cosmosReportPartRepo.GetVesselTypeExportSectionConfiguration(1, 1);
+                    var sqlExportSec = await sqlReportPartRepo.GetVesselTypeExportSectionConfiguration(realPartMapping.PartId, realPartMapping.VesselTypeId);
+                    var cosExportSec = await cosmosReportPartRepo.GetVesselTypeExportSectionConfiguration(realPartMapping.PartId, realPartMapping.VesselTypeId);
                     methodPositiveRows["ReportPart.GetVesselTypeExportSectionConfiguration"] = sqlExportSec.Count;
-                    checks.Add(ParityCompare.Lists("R2.ReportPart.GetVesselTypeExportSectionConfiguration(1, 1)", sqlExportSec, cosExportSec, x => x.SectionId, false,
-                        ("SectionId", x => x.SectionId),
-                        ("SectionName", x => x.SectionName)));
+                    // ORDER BY [Order] (Config.GetVesselTypeExportConfigForSections) – ties possible
+                    checks.Add(ParityDeep.ListsOrderedWithTies($"R2.ReportPart.GetVesselTypeExportSectionConfiguration({realPartMapping.PartId}, {realPartMapping.VesselTypeId})", sqlExportSec, cosExportSec, x => 0, x => (x.SectionId, x.TankTypeId, x.IsSubSection)));
                 }
 
                 // ==========================================
@@ -10355,17 +10394,20 @@ namespace DigitalCap.Server.DevTools
                 var actContainer = containerFactory.GetContainer(CosmosContainers.CAP_Activities);
                 var ptsContainer = containerFactory.GetContainer(CosmosContainers.CAP_ProjectTaskStatus);
                 var rsdContainer = containerFactory.GetContainer(CosmosContainers.dbo_ReportSurveyDetails);
+                var descContainer = containerFactory.GetContainer(CosmosContainers.dbo_ImageDescriptions);
+                var secDescContainer = containerFactory.GetContainer(CosmosContainers.Config_VesselTypeSectionDescriptionMapping);
+                var normSecContainer = containerFactory.GetContainer(CosmosContainers.Config_VesselTypeNormalSectionMapping);
 
                 var cleanupList = new List<(Container container, string id, PartitionKey pk)>();
 
                 try
                 {
-                    // Empty-before check across all 12 write containers (T-6)
-                    var preCp = await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id IN ('ffffffff-ffff-ffff-ffff-ffffffff9991', 'ffffffff-ffff-ffff-ffff-ffffffff9999')");
+                    // Empty-before check across all 13 write containers (T-6)
+                    var preCp = await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id IN ('ffffffff-ffff-ffff-ffff-ffffffff9991', 'ffffffff-ffff-ffff-ffff-ffffffff9993', 'ffffffff-ffff-ffff-ffff-ffffffff9994', 'ffffffff-ffff-ffff-ffff-ffffffff9999')");
                     var preUser = await SafeQueryAsync<object>(userContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9992'");
                     var preRolePerm = await SafeQueryAsync<object>(rolePermContainer, "SELECT * FROM c WHERE c.RoleId = 'ffffffff-ffff-ffff-ffff-ffffffff9997' OR c.PermissionId = 'ffffffff-ffff-ffff-ffff-ffffffff9996' OR c.Id = 'ffffffff-ffff-ffff-ffff-ffffffff9998'");
                     var preComment = await SafeQueryAsync<object>(commentsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888) OR c.id = '-99888'");
-                    var preFile = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888)");
+                    var preFile = await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888) OR c.id = '-99951'");
                     var preProj = await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998', '-99888')");
                     var preTank = await SafeQueryAsync<object>(tankContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
                     var preVessel = await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998', '-99888')");
@@ -10373,10 +10415,12 @@ namespace DigitalCap.Server.DevTools
                     var preAct = await SafeQueryAsync<object>(actContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888)");
                     var prePts = await SafeQueryAsync<object>(ptsContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
                     var preRsd = await SafeQueryAsync<object>(rsdContainer, "SELECT * FROM c WHERE c.id IN ('-999', '-998', '-997', '-99888')");
+                    var preDesc = await SafeQueryAsync<object>(descContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
 
                     bool preCheckPassed = preCp.Count == 0 && preUser.Count == 0 && preRolePerm.Count == 0 && preComment.Count == 0
                         && preFile.Count == 0 && preProj.Count == 0 && preTank.Count == 0 && preVessel.Count == 0
-                        && preCert.Count == 0 && preAct.Count == 0 && prePts.Count == 0 && preRsd.Count == 0;
+                        && preCert.Count == 0 && preAct.Count == 0 && prePts.Count == 0 && preRsd.Count == 0
+                        && preDesc.Count == 0;
 
                     if (!preCheckPassed)
                     {
@@ -10385,7 +10429,61 @@ namespace DigitalCap.Server.DevTools
                     }
                     else
                     {
-                        // V8: UpdateReportMainDataAsync on missing main-data row throws exact message
+                        // D1: cosmosDescRepo.CreateProjectImageDescription(-999, null!) -> nothing written
+                        var preD1Count = (await SafeQueryAsync<object>(descContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0))).Count;
+                        bool d1Res = await cosmosDescRepo.CreateProjectImageDescription(-999, null!);
+                        var postD1Count = (await SafeQueryAsync<object>(descContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0))).Count;
+                        bool d1Ok = d1Res && preD1Count == postD1Count && postD1Count == 0;
+                        writeSteps.Add(new { step = "D1.Description.CreateProjectImageDescription.NullVesselTypeWritesNothing", passed = d1Ok, d1Res, preD1Count, postD1Count });
+                        if (!d1Ok) allPassed = false;
+
+                        // D6: CreateImageDescription on a test description in -999 -> new CategoryId = MAX(CategoryId)+1
+                        var maxCatQ = new QueryDefinition("SELECT VALUE MAX(c.CategoryId) FROM c WHERE c.IsActive = true AND c.IsDeleted = false");
+                        long? maxCatBefore = null;
+                        using (var feed = descContainer.GetItemQueryIterator<long?>(maxCatQ))
+                        {
+                            while (feed.HasMoreResults)
+                            {
+                                var resp = await feed.ReadNextAsync();
+                                var val = resp.FirstOrDefault();
+                                if (val.HasValue && (!maxCatBefore.HasValue || val.Value > maxCatBefore.Value)) maxCatBefore = val;
+                            }
+                        }
+                        long expectedNewCatId = (maxCatBefore ?? 0) + 1;
+
+                        var d6SecGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9995");
+                        var normDoc = new VesselTypeNormalSectionMappingDocument
+                        {
+                            id = "norm-" + d6SecGuid.ToString("D").ToLowerInvariant(),
+                            SectionMappingId = d6SecGuid.ToString(),
+                            IsActive = true,
+                            IsDeleted = false
+                        };
+                        await normSecContainer.CreateItemAsync(normDoc, new PartitionKey(normDoc.id));
+                        cleanupList.Add((normSecContainer, normDoc.id, new PartitionKey(normDoc.id)));
+
+                        var testDesc = new ImageDescriptions
+                        {
+                            ProjectId = -999,
+                            SectionId = d6SecGuid,
+                            Description = "Test Image Description D6",
+                            IsActive = true,
+                            IsDeleted = false,
+                            CreatedDttm = new DateTime(2026, 11, 20),
+                            UpdatedDttm = new DateTime(2026, 11, 20)
+                        };
+                        bool d6CreateRes = await cosmosDescRepo.CreateImageDescription(testDesc);
+                        var createdDescs = await SafeQueryAsync<ImageDescriptionDocument>(descContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
+                        foreach (var d in createdDescs) cleanupList.Add((descContainer, d.id, new PartitionKey(-999.0)));
+                        cleanupList.Add((secDescContainer, $"{d6SecGuid}|{expectedNewCatId}", new PartitionKey($"{d6SecGuid}|{expectedNewCatId}")));
+
+                        bool d6Ok = d6CreateRes && createdDescs.Count == 1 && createdDescs[0].CategoryId == expectedNewCatId;
+                        writeSteps.Add(new { step = "D6.Description.CreateImageDescription.MaxCategoryIdPlus1", passed = d6Ok, d6CreateRes, expectedNewCatId, actualCatId = createdDescs.FirstOrDefault()?.CategoryId });
+                        if (!d6Ok) allPassed = false;
+
+                        // VesselRepository.UpdateReportMainDataAsync: @reportPort passed, Insert_VesselDetails has no such parameter
+                        // V8: UpdateReportMainDataAsync on missing main-data row throws exact message; count before == after
+                        var preV8Count = (await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         bool v8Thrown = false;
                         string? v8Msg = null;
                         try
@@ -10399,8 +10497,11 @@ namespace DigitalCap.Server.DevTools
                             v8Thrown = true;
                             v8Msg = ex.Message;
                         }
-                        bool v8Ok = v8Thrown && v8Msg == "Procedure or function Insert_VesselDetails has too many arguments specified.";
-                        writeSteps.Add(new { step = "T-f.KnownBug.V8.UpdateReportMainDataAsync", passed = v8Ok, v8Thrown, v8Msg });
+                        var postV8Count = (await SafeQueryAsync<object>(vesselContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
+                        bool v8Ok = v8Thrown
+                            && v8Msg == "Procedure or function Insert_VesselDetails has too many arguments specified."
+                            && preV8Count == postV8Count && postV8Count == 0;
+                        writeSteps.Add(new { step = "T-f.KnownBug.V8.UpdateReportMainDataAsync", passed = v8Ok, v8Thrown, v8Msg, preV8Count, postV8Count });
                         if (!v8Ok) allPassed = false;
 
                         // V15: seed a ReportSurveyDetails doc for -998 with imoNum set, call UpdateSurveyAudit(new SurveyStatus(), -998), expect ArgumentNullException and doc unchanged
@@ -10415,22 +10516,25 @@ namespace DigitalCap.Server.DevTools
                         cleanupList.Add((rsdContainer, "-998", new PartitionKey("-998")));
 
                         bool v15Thrown = false;
+                        string? v15Msg = null;
                         try
                         {
                             await cosmosVesselRepo.UpdateSurveyAudit(new SurveyStatus(), -998);
                         }
-                        catch (ArgumentNullException)
+                        catch (ArgumentNullException ex)
                         {
                             v15Thrown = true;
+                            v15Msg = ex.Message;
                         }
 
                         var v15ReadBack = await rsdContainer.ReadItemAsync<ReportSurveyDetailsDocument>("-998", new PartitionKey("-998"));
                         var v15EtagAfter = v15ReadBack.ETag;
-                        bool v15Ok = v15Thrown && !string.IsNullOrEmpty(v15EtagBefore) && v15EtagBefore == v15EtagAfter;
-                        writeSteps.Add(new { step = "T-f.KnownBug.V15.UpdateSurveyAudit", passed = v15Ok, v15Thrown, v15EtagBefore, v15EtagAfter });
+                        bool v15MsgMatch = string.Equals(v15Msg, "Value cannot be null. (Parameter 'source')", StringComparison.Ordinal);
+                        bool v15Ok = v15Thrown && v15MsgMatch && !string.IsNullOrEmpty(v15EtagBefore) && v15EtagBefore == v15EtagAfter;
+                        writeSteps.Add(new { step = "T-f.KnownBug.V15.UpdateSurveyAudit", passed = v15Ok, v15Thrown, v15MsgMatch, v15Msg, v15EtagBefore, v15EtagAfter });
                         if (!v15Ok) allPassed = false;
 
-                        // A6 & F-A6b: AddRolePermissionAsync & UpdateRolePermissionAsync updates all matching rows
+                        // A6 & F-A6b: AddRolePermissionAsync & UpdateRolePermissionAsync updates all matching rows (read back every column)
                         var templateGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9996");
                         var roleIdGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9997");
                         var templateId1 = "tmpl1-" + templateGuid.ToString("D").ToLowerInvariant();
@@ -10442,7 +10546,11 @@ namespace DigitalCap.Server.DevTools
                             PermissionId = templateGuid,
                             RoleId = null,
                             IsReadable = true,
-                            IsEditable = false
+                            IsEditable = false,
+                            IsDeleted = false,
+                            ReadExist = true,
+                            EditExist = false,
+                            DeleteExist = true
                         };
                         var templateDoc2 = new RolePermissionsMappingDocument
                         {
@@ -10451,7 +10559,11 @@ namespace DigitalCap.Server.DevTools
                             PermissionId = templateGuid,
                             RoleId = null,
                             IsReadable = false,
-                            IsEditable = true
+                            IsEditable = true,
+                            IsDeleted = false,
+                            ReadExist = false,
+                            EditExist = true,
+                            DeleteExist = false
                         };
                         await rolePermContainer.CreateItemAsync(templateDoc1, new PartitionKey(templateId1));
                         cleanupList.Add((rolePermContainer, templateId1, new PartitionKey(templateId1)));
@@ -10463,14 +10575,28 @@ namespace DigitalCap.Server.DevTools
                         {
                             Id = inputGuid,
                             RoleId = roleIdGuid,
-                            PermissionId = templateGuid
+                            PermissionId = templateGuid,
+                            IsReadable = true,
+                            IsEditable = false,
+                            IsDeleted = false
                         });
 
                         var createdRolePerms = await SafeQueryAsync<RolePermissionsMappingDocument>(
                             rolePermContainer,
                             $"SELECT * FROM c WHERE c.RoleId = '{roleIdGuid}'");
 
-                        bool a6Ok = addRes && createdRolePerms.Count == 2 && createdRolePerms.All(r => r.Id == inputGuid);
+                        // A6: read back every column of each created row (RoleId, PermissionId, IsReadable, IsEditable, IsDeleted, ReadExist, EditExist, DeleteExist, Id)
+                        bool a6Ok = addRes && createdRolePerms.Count == 2
+                            && createdRolePerms.All(r =>
+                                r.RoleId == roleIdGuid &&
+                                r.PermissionId == templateGuid &&
+                                r.Id == inputGuid &&
+                                r.IsReadable == true &&
+                                r.IsEditable == false &&
+                                r.IsDeleted == false &&
+                                r.ReadExist.HasValue &&
+                                r.EditExist.HasValue &&
+                                r.DeleteExist.HasValue);
                         foreach (var doc in createdRolePerms)
                         {
                             cleanupList.Add((rolePermContainer, doc.id, new PartitionKey(doc.id)));
@@ -10489,7 +10615,7 @@ namespace DigitalCap.Server.DevTools
                         var updatedRolePerms = await SafeQueryAsync<RolePermissionsMappingDocument>(
                             rolePermContainer,
                             $"SELECT * FROM c WHERE c.RoleId = '{roleIdGuid}'");
-                        bool fA6bOk = updAllRes && updatedRolePerms.Count == 2 && updatedRolePerms.All(r => r.IsReadable == true && r.IsEditable == true);
+                        bool fA6bOk = updAllRes && updatedRolePerms.Count == 2 && updatedRolePerms.All(r => r.IsReadable == true && r.IsEditable == true && r.IsDeleted == false);
 
                         bool missingPermRes = await cosmosPermRepo.UpdateRolePermissionAsync(new DigitalCap.Core.Models.Permissions.UserRolePermission
                         {
@@ -10501,7 +10627,8 @@ namespace DigitalCap.Server.DevTools
                         writeSteps.Add(new { step = "A6_FA6b.UserPermission.AddAndUpdateAllMatching", passed = a6AllOk, a6Ok, fA6bOk, missingPermRes });
                         if (!a6AllOk) allPassed = false;
 
-                        // A10: ClientProfile.SaveClientProfileAsync missing throws; AddAsync rejects null; AddAsync valid writes and reads back; SaveClientProfileAsync updates
+                        // A10: ClientProfile.SaveClientProfileAsync missing throws (count before == after); AddAsync rejects null (exact message); add CompanyName = "" (accepted, tracked); CompanyName 151 chars (rejected, nothing written); valid writes and reads back; SaveClientProfileAsync updates
+                        var preMissingA10Count = (await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9999'", new PartitionKey("ffffffff-ffff-ffff-ffff-ffffffff9999"))).Count;
                         bool a10MissingThrows = false;
                         try
                         {
@@ -10511,8 +10638,11 @@ namespace DigitalCap.Server.DevTools
                         {
                             a10MissingThrows = true;
                         }
+                        var postMissingA10Count = (await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9999'", new PartitionKey("ffffffff-ffff-ffff-ffff-ffffffff9999"))).Count;
+                        bool a10MissingCountOk = a10MissingThrows && preMissingA10Count == postMissingA10Count && postMissingA10Count == 0;
 
                         bool a10NullReject = false;
+                        string? a10NullMsg = null;
                         try
                         {
                             await cosmosClientProfileRepo.AddAsync(new Client
@@ -10522,10 +10652,44 @@ namespace DigitalCap.Server.DevTools
                                 CompanyAddress = "ValidAddress"
                             });
                         }
-                        catch (InvalidOperationException ex) when (ex.Message.Contains("Cannot insert the value NULL into column 'CompanyName'"))
+                        catch (InvalidOperationException ex)
                         {
                             a10NullReject = true;
+                            a10NullMsg = ex.Message;
                         }
+                        bool a10NullMsgExact = a10NullReject && string.Equals(a10NullMsg, "Cannot insert the value NULL into column 'CompanyName', table 'CAP.Clients'; column does not allow nulls. INSERT fails.\r\nThe statement has been terminated.", StringComparison.Ordinal);
+
+                        // CompanyName = "" (accepted, tracked)
+                        var a10EmptyGuid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9993");
+                        var a10EmptyId = a10EmptyGuid.ToString("D").ToLowerInvariant();
+                        await cosmosClientProfileRepo.AddAsync(new Client
+                        {
+                            Id = a10EmptyGuid,
+                            CompanyName = "",
+                            CompanyAddress = "Empty Address"
+                        });
+                        cleanupList.Add((clientsContainer, a10EmptyId, new PartitionKey(a10EmptyId)));
+                        var readA10Empty = await SafeReadAsync<ClientsDocument>(clientsContainer, a10EmptyId, new PartitionKey(a10EmptyId));
+                        bool a10EmptyOk = readA10Empty != null && readA10Empty.CompanyName == "";
+
+                        // CompanyName of 151 characters (rejected, nothing written)
+                        var pre151Count = (await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9994'", new PartitionKey("ffffffff-ffff-ffff-ffff-ffffffff9994"))).Count;
+                        bool a10151Throws = false;
+                        try
+                        {
+                            await cosmosClientProfileRepo.AddAsync(new Client
+                            {
+                                Id = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9994"),
+                                CompanyName = new string('A', 151),
+                                CompanyAddress = "Addr"
+                            });
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("String or binary data would be truncated."))
+                        {
+                            a10151Throws = true;
+                        }
+                        var post151Count = (await SafeQueryAsync<object>(clientsContainer, "SELECT * FROM c WHERE c.id = 'ffffffff-ffff-ffff-ffff-ffffffff9994'", new PartitionKey("ffffffff-ffff-ffff-ffff-ffffffff9994"))).Count;
+                        bool a10151Ok = a10151Throws && pre151Count == post151Count && post151Count == 0;
 
                         var a10Guid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9991");
                         var a10Id = a10Guid.ToString("D").ToLowerInvariant();
@@ -10553,11 +10717,11 @@ namespace DigitalCap.Server.DevTools
                         var readA10Upd = await SafeReadAsync<ClientsDocument>(clientsContainer, a10Id, new PartitionKey(a10Id));
                         bool a10UpdOk = readA10Upd != null && readA10Upd.CompanyName == "TestClientA10_Updated" && readA10Upd.CompanyAddress == "456 Updated St";
 
-                        bool a10AllOk = a10MissingThrows && a10NullReject && a10InsertOk && a10UpdOk;
-                        writeSteps.Add(new { step = "A10.ClientProfile.ValidationAndFullReadBack", passed = a10AllOk, a10MissingThrows, a10NullReject, a10InsertOk, a10UpdOk });
+                        bool a10AllOk = a10MissingCountOk && a10NullMsgExact && a10EmptyOk && a10151Ok && a10InsertOk && a10UpdOk;
+                        writeSteps.Add(new { step = "A10.ClientProfile.ValidationAndFullReadBack", passed = a10AllOk, a10MissingCountOk, a10NullMsgExact, a10EmptyOk, a10151Ok, a10InsertOk, a10UpdOk });
                         if (!a10AllOk) allPassed = false;
 
-                        // A11: UserAccount.InsertAsync rejects duplicate PK
+                        // A11: UserAccount.InsertAsync rejects duplicate PK; _etag before == after on the seeded doc
                         var a11Guid = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffff9992");
                         var a11Id = a11Guid.ToString("D").ToLowerInvariant();
                         var a11Doc = new UserAccountDocument
@@ -10568,7 +10732,8 @@ namespace DigitalCap.Server.DevTools
                             FirstName = "TestA11",
                             Deleted = false
                         };
-                        await userContainer.CreateItemAsync(a11Doc, new PartitionKey(a11Id));
+                        var a11Created = await userContainer.CreateItemAsync(a11Doc, new PartitionKey(a11Id));
+                        var a11EtagBefore = a11Created.ETag;
                         cleanupList.Add((userContainer, a11Id, new PartitionKey(a11Id)));
 
                         bool a11DuplicateRejected = false;
@@ -10585,8 +10750,12 @@ namespace DigitalCap.Server.DevTools
                         {
                             a11DuplicateRejected = true;
                         }
-                        writeSteps.Add(new { step = "A11.UserAccount.InsertAsync.RejectsDuplicatePK", passed = a11DuplicateRejected });
-                        if (!a11DuplicateRejected) allPassed = false;
+                        var a11ReadBack = await userContainer.ReadItemAsync<UserAccountDocument>(a11Id, new PartitionKey(a11Id));
+                        var a11EtagAfter = a11ReadBack.ETag;
+                        bool a11EtagOk = !string.IsNullOrEmpty(a11EtagBefore) && a11EtagBefore == a11EtagAfter;
+                        bool a11Ok = a11DuplicateRejected && a11EtagOk;
+                        writeSteps.Add(new { step = "A11.UserAccount.InsertAsync.RejectsDuplicatePK", passed = a11Ok, a11DuplicateRejected, a11EtagOk, a11EtagBefore, a11EtagAfter });
+                        if (!a11Ok) allPassed = false;
 
                         // B8 Comment & B3: CreateCommentAsync accepts empty, rejects null but writes activity; UpdateCommentAsync on missing writes activity
                         var aspNetUsersContainer = containerFactory.GetContainer(CosmosContainers.dbo_AspNetUsers);
@@ -10642,7 +10811,8 @@ namespace DigitalCap.Server.DevTools
                         writeSteps.Add(new { step = "B8_B3.Comment.ValidationEmptyNullAndActivity", passed = b8CommentOk, b8EmptyOk, b8CommentReject, nullCommentNoNewComment, nullCommentActOk, missingNoThrow = !b8UpdThrown, missingUpdActOk });
                         if (!b8CommentOk) allPassed = false;
 
-                        // B8 FileStorage & B3: Save null throws; Update missing throws; valid save creates activity and full read back
+                        // B8 FileStorage & B3: Save null throws; Update missing throws; valid save creates activity and full read back; Name = "" accepted; 51-char StorageKey rejected without activity
+                        var preFileCount1 = (await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0))).Count;
                         bool b8FileNullThrows = false;
                         try
                         {
@@ -10652,7 +10822,10 @@ namespace DigitalCap.Server.DevTools
                         {
                             b8FileNullThrows = true;
                         }
+                        var postFileCount1 = (await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0))).Count;
+                        bool fileCount1Ok = preFileCount1 == postFileCount1;
 
+                        var preFileCount2 = postFileCount1;
                         bool b8FileNameNullThrows = false;
                         try
                         {
@@ -10662,10 +10835,27 @@ namespace DigitalCap.Server.DevTools
                         {
                             b8FileNameNullThrows = true;
                         }
+                        var postFileCount2 = (await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0))).Count;
+                        bool fileCount2Ok = preFileCount2 == postFileCount2;
 
+                        // Name = "" (accepted, tracked)
+                        var emptyNameFile = await cosmosFileStorageRepo.SaveProjectFile(new ProjectFile
+                        {
+                            ProjectId = -999,
+                            TaskId = 111,
+                            Name = "",
+                            Extension = ".pdf",
+                            MimeType = "application/pdf"
+                        }, "emptyKey", "admin");
+                        cleanupList.Add((fileContainer, emptyNameFile.Id.ToString(), new PartitionKey(emptyNameFile.Id.ToString())));
+                        var readEmptyFile = await SafeReadAsync<FileDocument>(fileContainer, emptyNameFile.Id.ToString(), new PartitionKey(emptyNameFile.Id.ToString()));
+                        bool emptyNameOk = readEmptyFile != null && readEmptyFile.Name == "";
+
+                        // Valid save: read back ProjectId, TaskId and the date of the valid file
                         var savedFile = await cosmosFileStorageRepo.SaveProjectFile(new ProjectFile
                         {
                             ProjectId = -999,
+                            TaskId = 222,
                             Name = "test.pdf",
                             Extension = ".pdf",
                             MimeType = "application/pdf"
@@ -10674,6 +10864,10 @@ namespace DigitalCap.Server.DevTools
 
                         var readSavedFile = await SafeReadAsync<FileDocument>(fileContainer, savedFile.Id.ToString(), new PartitionKey(savedFile.Id.ToString()));
                         bool b8FileSaveOk = readSavedFile != null
+                            && readSavedFile.Projectid == -999
+                            && readSavedFile.TaskId == 222
+                            && readSavedFile.LastModifiedDate.HasValue
+                            && Math.Abs((readSavedFile.LastModifiedDate.Value - DateTime.UtcNow).TotalMinutes) < 5
                             && readSavedFile.Name == "test.pdf"
                             && readSavedFile.Extension == ".pdf"
                             && readSavedFile.MimeType == "application/pdf"
@@ -10684,6 +10878,36 @@ namespace DigitalCap.Server.DevTools
                         foreach (var a in fileActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
                         bool b8FileActOk = fileActs.Any(a => a.Text == "Uploaded file test.pdf" && a.CreateBy == "admin");
 
+                        // StorageKey of 51 characters -> rejected and no activity written
+                        var file51Doc = new FileDocument
+                        {
+                            id = "-99951",
+                            Id = -99951,
+                            Projectid = -999,
+                            StorageKey = new string('S', 51),
+                            Name = "file51.pdf",
+                            Extension = ".pdf",
+                            MimeType = "application/pdf"
+                        };
+                        await fileContainer.CreateItemAsync(file51Doc, new PartitionKey("-99951"));
+                        cleanupList.Add((fileContainer, "-99951", new PartitionKey("-99951")));
+
+                        var pre51FileCount = (await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.id = '-99951'", new PartitionKey("-99951"))).Count;
+                        var pre51ActCount = (await SafeQueryAsync<object>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0))).Count;
+                        bool file51TruncThrows = false;
+                        try
+                        {
+                            await cosmosFileStorageRepo.UpdateFileMetadata(-99951, FileDataType.Photos, "new_name51", true, "admin");
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("String or binary data would be truncated."))
+                        {
+                            file51TruncThrows = true;
+                        }
+                        var post51FileCount = (await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.id = '-99951'", new PartitionKey("-99951"))).Count;
+                        var post51ActCount = (await SafeQueryAsync<object>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0))).Count;
+                        bool file51Ok = file51TruncThrows && pre51FileCount == post51FileCount && pre51ActCount == post51ActCount;
+
+                        var preUpdMissCount = (await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         bool b8FileUpdReject = false;
                         try
                         {
@@ -10693,9 +10917,11 @@ namespace DigitalCap.Server.DevTools
                         {
                             b8FileUpdReject = true;
                         }
+                        var postUpdMissCount = (await SafeQueryAsync<object>(fileContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
+                        bool updMissCountOk = preUpdMissCount == postUpdMissCount;
 
-                        bool b8FileAllOk = b8FileNullThrows && b8FileNameNullThrows && b8FileSaveOk && b8FileActOk && b8FileUpdReject;
-                        writeSteps.Add(new { step = "B8_B3.FileStorage.ValidationFullReadBackAndActivity", passed = b8FileAllOk, b8FileNullThrows, b8FileNameNullThrows, b8FileSaveOk, b8FileActOk, b8FileUpdReject });
+                        bool b8FileAllOk = b8FileNullThrows && b8FileNameNullThrows && fileCount1Ok && fileCount2Ok && emptyNameOk && b8FileSaveOk && b8FileActOk && file51Ok && b8FileUpdReject && updMissCountOk;
+                        writeSteps.Add(new { step = "B8_B3.FileStorage.ValidationFullReadBackAndActivity", passed = b8FileAllOk, fileCount1Ok, fileCount2Ok, emptyNameOk, b8FileSaveOk, b8FileActOk, file51Ok, b8FileUpdReject });
                         if (!b8FileAllOk) allPassed = false;
 
                         // P11, P12, P13, V2/V3: Project updates and activities (T-6: P16 CreateProject removed from write tests)
@@ -10711,48 +10937,63 @@ namespace DigitalCap.Server.DevTools
                             IMO = 0,
                             IsDeleted = false
                         };
-                        await projectContainer.CreateItemAsync(projDoc, new PartitionKey("-999"));
+                        var projCreated = await projectContainer.CreateItemAsync(projDoc, new PartitionKey("-999"));
+                        var projEtagBefore = projCreated.ETag;
                         cleanupList.Add((projectContainer, "-999", new PartitionKey("-999")));
 
                         // Method 1: UpdatePercentComplete (also tests P11: currentUser null -> "SYSTEM")
+                        var preMissP12Count = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         int updPcExists = await cosmosProjectRepo.UpdatePercentComplete(-999, 85, null!);
                         int updPcMissing = await cosmosProjectRepo.UpdatePercentComplete(-99888, 85, null!);
+                        var postMissP12Count = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         var readPc = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
-                        bool p12Ok = updPcExists == 1 && updPcMissing == 0 && readPc?.PercentComplete == 85 && readPc?.LastModifiedBy == "SYSTEM";
+                        bool p12Ok = updPcExists == 1 && updPcMissing == 0 && readPc?.PercentComplete == 85 && readPc?.LastModifiedBy == "SYSTEM" && preMissP12Count == postMissP12Count;
 
-                        // Method 2: UpdateProjectStatus (tests P11: currentUser null -> StatusChangedBy = "SYSTEM")
+                        // Method 2: UpdateProjectStatus (tests P11: currentUser null -> StatusChangedBy = "SYSTEM"; missing -99888 writes activity)
+                        var preMissP13Count = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         await cosmosProjectRepo.UpdateProjectStatus(-999, "uid", 2, null!);
                         await cosmosProjectRepo.UpdateProjectStatus(-99888, "uid", 2, null!);
+                        var postMissP13Count = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         var readStatus = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
-                        bool p13StatusOk = readStatus?.ProjectStatus == 2 && readStatus?.StatusChangedBy == "SYSTEM";
+                        bool p13StatusOk = readStatus?.ProjectStatus == 2 && readStatus?.StatusChangedBy == "SYSTEM" && preMissP13Count == postMissP13Count;
 
-                        // Method 3: UpdatePriority
+                        // Method 3: UpdatePriority (missing -99888 writes activity)
+                        var preMissPrioCount = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         await cosmosProjectRepo.UpdatePriority(-999, 5, "admin");
                         var readPrio5 = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
                         await cosmosProjectRepo.UpdatePriority(-999, null, "admin");
                         await cosmosProjectRepo.UpdatePriority(-99888, 5, "admin");
+                        var postMissPrioCount = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         var readPrioNull = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
-                        bool p13PrioOk = readPrio5?.ProjectPriority == 5 && readPrioNull?.ProjectPriority == null;
+                        bool p13PrioOk = readPrio5?.ProjectPriority == 5 && readPrioNull?.ProjectPriority == null && preMissPrioCount == postMissPrioCount;
 
-                        // Method 4: Update_Project (V2/V3: verifies modified updated and unmodified preserved)
+                        // Method 4: Update_Project (V2/V3: verifies modified updated and unmodified preserved; missing -99888 writes activity)
+                        var preMissProjCount = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         await cosmosProjectRepo.Update_Project(new Project { Id = -999, Name = "UpdatedProject-999", CRMOpportunityNumber = "CRM999" }, "admin");
                         await cosmosProjectRepo.Update_Project(new Project { Id = -99888, Name = "Missing" }, "admin");
+                        var postMissProjCount = (await SafeQueryAsync<object>(projectContainer, "SELECT * FROM c WHERE c.id = '-99888'", new PartitionKey("-99888"))).Count;
                         var readProj = await SafeReadAsync<ProjectDocument>(projectContainer, "-999", new PartitionKey("-999"));
                         bool p13ProjOk = readProj?.Name == "UpdatedProject-999"
                             && readProj?.CRMOpportunityNumber == "CRM999"
                             && readProj?.PercentComplete == 85
                             && readProj?.ProjectStatus == 2
-                            && readProj?.CapRegion == "Americas";
+                            && readProj?.CapRegion == "Americas"
+                            && preMissProjCount == postMissProjCount;
 
-                        // Cleanup activities written by the 4 update methods
+                        // P13: Check that activity for -99888 is written where the SP carries on (UpdateProjectStatus, UpdatePriority, Update_Project)
+                        var missActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -99888", new PartitionKey(-99888.0));
+                        foreach (var a in missActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-99888.0)));
+                        bool p13MissActsOk = missActs.Count >= 3;
+
+                        // Cleanup activities written by the update methods for -999
                         var projActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
                         foreach (var a in projActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
 
-                        bool all4MethodsOk = p12Ok && p13StatusOk && p13PrioOk && p13ProjOk;
-                        writeSteps.Add(new { step = "P11_P12_P13_V2V3.Project.All4UpdateMethods", passed = all4MethodsOk, p12Ok, p13StatusOk, p13PrioOk, p13ProjOk });
+                        bool all4MethodsOk = p12Ok && p13StatusOk && p13PrioOk && p13ProjOk && p13MissActsOk;
+                        writeSteps.Add(new { step = "P11_P12_P13_V2V3.Project.All4UpdateMethods", passed = all4MethodsOk, p12Ok, p13StatusOk, p13PrioOk, p13ProjOk, p13MissActsOk });
                         if (!all4MethodsOk) allPassed = false;
 
-                        // T4 & T3: CreateTank date < 1753 rejected without write; valid tank writes and reads back; duplicate PK rejected
+                        // T4 & T3: CreateTank date < 1753 rejected without write; valid tank writes, reads back with dates; duplicate PK rejected
                         var badTank = new VesselTank
                         {
                             Id = Guid.NewGuid(),
@@ -10767,19 +11008,25 @@ namespace DigitalCap.Server.DevTools
                         bool t4BadOk = !createBadTankRes && readBadTank == null;
 
                         var goodTankGuid = Guid.NewGuid();
+                        var goodTankDate = new DateTime(2026, 11, 20);
                         var goodTank = new VesselTank
                         {
                             Id = goodTankGuid,
                             ProjectId = -999,
                             TankName = "GoodTank",
                             TankTypeId = 1,
-                            CreatedDttm = new DateTime(2026, 11, 20),
-                            UpdateDttm = new DateTime(2026, 11, 20)
+                            CreatedDttm = goodTankDate,
+                            UpdateDttm = goodTankDate
                         };
                         bool createGoodTankRes = await cosmosTankRepo.CreateTank(goodTank);
                         cleanupList.Add((tankContainer, goodTankGuid.ToString(), new PartitionKey(-999.0)));
                         var readGoodTank = await SafeReadAsync<VesselTankMappingDocument>(tankContainer, goodTankGuid.ToString(), new PartitionKey(-999.0));
-                        bool t4GoodOk = createGoodTankRes && readGoodTank != null && readGoodTank.TankName == "GoodTank" && readGoodTank.TankTypeId == 1;
+                        // T4: read back the dates of the good tank
+                        bool t4GoodOk = createGoodTankRes && readGoodTank != null
+                            && readGoodTank.TankName == "GoodTank"
+                            && readGoodTank.TankTypeId == 1
+                            && readGoodTank.CreatedDttm.HasValue && readGoodTank.CreatedDttm.Value.Date == goodTankDate.Date
+                            && readGoodTank.UpdateDttm.HasValue && readGoodTank.UpdateDttm.Value.Date == goodTankDate.Date;
 
                         // T3: CreateTank rejects duplicate PK
                         bool createDupTankRes = await cosmosTankRepo.CreateTank(goodTank);
@@ -10789,19 +11036,29 @@ namespace DigitalCap.Server.DevTools
                         writeSteps.Add(new { step = "T4_T3.Tank.CreateTank.ValidationWriteAndDupPK", passed = t4AllOk, t4BadOk, t4GoodOk, t3Ok });
                         if (!t4AllOk) allPassed = false;
 
-                        // V6, V7, V10, F-V10: CreateVesselMainDataAsync
+                        // V6, V7, V10, F-V10: CreateVesselMainDataAsync (read back every column)
                         var v10Project = new Project
                         {
                             Id = -999,
                             VesselName = "TestVessel-999",
                             IMO = 1234567,
                             Builder = "V10Builder",
-                            LengthOverall = 120.50m
+                            LengthOverall = 120.50m,
+                            YearBuilt = 2020,
+                            HullNumber = "HULL10",
+                            AbsClassID = "ABS10",
+                            ClassSociety = new[] { "ABS" }
                         };
                         var v10Vessel = new DigitalCap.Core.Models.VesselModel.Vessel
                         {
                             ImoNumber = "1234567",
-                            SelectedPrefix = 0
+                            SelectedPrefix = 0,
+                            OfficialNumber = "OFF123",
+                            CallSign = "CALL1",
+                            VesselType = "Bulk Carrier",
+                            FlagName = "Panama",
+                            PortRegistry = "Panama Port",
+                            ClassNotation = "A1"
                         };
                         await cosmosVesselRepo.CreateVesselMainDataAsync("-999", v10Project, v10Vessel);
                         cleanupList.Add((vesselContainer, "-999", new PartitionKey("-999")));
@@ -10810,9 +11067,21 @@ namespace DigitalCap.Server.DevTools
                             && readV10.vesselName == "TestVessel-999"
                             && readV10.imoNumber == 1234567
                             && readV10.SelectedPrefix == 0
-                            && readV10.builtBy == "V10Builder";
+                            && readV10.builtBy == "V10Builder"
+                            && readV10.yearBuilt == "2020"
+                            && readV10.length == "120.50"
+                            && readV10.hullNo == "HULL10"
+                            && readV10.classNo == "ABS10"
+                            && readV10.classed == "ABS"
+                            && readV10.officalNumber == "OFF123"
+                            && readV10.callSign == "CALL1"
+                            && readV10.vesselType == "Bulk Carrier"
+                            && readV10.flagName == "Panama"
+                            && readV10.homeport == "Panama Port"
+                            && readV10.classNotation == "A1"
+                            && readV10.vesselID == 1234567;
 
-                        // V6 & V7: UpdateReportMainDataAsync with "" -> null, and "   " -> 0
+                        // V6 & V7: UpdateReportMainDataAsync with "" -> null, "   " -> 0, "abc" -> throws, and portDate = "" -> throws
                         await cosmosVesselRepo.UpdateReportMainDataAsync(new Report
                         {
                             ReportDate = "2026-11-20",
@@ -10829,23 +11098,110 @@ namespace DigitalCap.Server.DevTools
                         var readV7 = await SafeReadAsync<ReportVesselMainDataDocument>(vesselContainer, "-999", new PartitionKey("-999"));
                         bool v7Ok = readV7 != null && readV7.SelectedPrefix == 0;
 
+                        // V6 add: SelectedPrefix = "abc" -> throws
+                        bool v6AbcThrows = false;
+                        try
+                        {
+                            await cosmosVesselRepo.UpdateReportMainDataAsync(new Report
+                            {
+                                ReportDate = "2026-11-20",
+                                Vessel = new DigitalCap.Core.Models.Survey.Vessel { SelectedPrefix = "abc", ClassNo = "1", VesselName = "TestVessel-999" }
+                            }, -999);
+                        }
+                        catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException)
+                        {
+                            v6AbcThrows = true;
+                        }
+
+                        // V7 add: data portDate = "" in doc with ReportDate = null -> throws FormatException
+                        var v7PortDoc = new ReportVesselMainDataDocument
+                        {
+                            id = "-997",
+                            projectId = -997,
+                            portDate = "",
+                            SelectedPrefix = 0
+                        };
+                        await vesselContainer.CreateItemAsync(v7PortDoc, new PartitionKey("-997"));
+                        cleanupList.Add((vesselContainer, "-997", new PartitionKey("-997")));
+
+                        bool v7PortDateThrows = false;
+                        try
+                        {
+                            await cosmosVesselRepo.UpdateReportMainDataAsync(new Report
+                            {
+                                ReportDate = null,
+                                Vessel = new DigitalCap.Core.Models.Survey.Vessel { ClassNo = "1", VesselName = "TestVessel-997" }
+                            }, -997);
+                        }
+                        catch (FormatException)
+                        {
+                            v7PortDateThrows = true;
+                        }
+
                         // F-V10: vessel == null still inserts row into dbo_ReportVesselMainData
                         await cosmosVesselRepo.CreateVesselMainDataAsync("-998", v10Project, null!);
                         cleanupList.Add((vesselContainer, "-998", new PartitionKey("-998")));
                         var readFV10 = await SafeReadAsync<ReportVesselMainDataDocument>(vesselContainer, "-998", new PartitionKey("-998"));
                         bool fV10Ok = readFV10 != null && readFV10.projectId == -998 && readFV10.vesselName == "TestVessel-999";
 
-                        bool vesselWritesOk = v10Ok && v6Ok && v7Ok && fV10Ok;
-                        writeSteps.Add(new { step = "V6_V7_V10_FV10.Vessel.CreateAndPrefixUpdates", passed = vesselWritesOk, v10Ok, v6Ok, v7Ok, fV10Ok });
+                        bool vesselWritesOk = v10Ok && v6Ok && v7Ok && v6AbcThrows && v7PortDateThrows && fV10Ok;
+                        writeSteps.Add(new { step = "V6_V7_V10_FV10.Vessel.CreateAndPrefixUpdates", passed = vesselWritesOk, v10Ok, v6Ok, v7Ok, v6AbcThrows, v7PortDateThrows, fV10Ok });
                         if (!vesselWritesOk) allPassed = false;
 
-                        // V12, V13, V14: Survey & Certificates
+                        // V2/V3: seed ReportVesselMainData doc for -999 with officalNumber = "", firstVisitDate = "01-01-2026", lastVisitDate = "01-02-2026"
+                        // call UpdateReportMainDataAsync with nulls and LastVisitDate = "01-12-2025" -> read back officalNumber == "" kept (V2), lastVisitDate == null (V3)
+                        var v2v3Doc = new ReportVesselMainDataDocument
+                        {
+                            id = "-999",
+                            projectId = -999,
+                            officalNumber = "",
+                            firstVisitDate = "01-01-2026",
+                            lastVisitDate = "01-02-2026",
+                            SelectedPrefix = 0
+                        };
+                        await vesselContainer.UpsertItemAsync(v2v3Doc, new PartitionKey("-999"));
+
+                        await cosmosVesselRepo.UpdateReportMainDataAsync(new Report
+                        {
+                            ReportDate = "2026-11-20",
+                            Vessel = new DigitalCap.Core.Models.Survey.Vessel
+                            {
+                                ClassNo = "1",
+                                VesselName = "TestVessel-999",
+                                OfficalNumber = null,
+                                FirstVisitDate = null,
+                                LastVisitDate = "01-12-2025"
+                            }
+                        }, -999);
+
+                        var readV2V3 = await SafeReadAsync<ReportVesselMainDataDocument>(vesselContainer, "-999", new PartitionKey("-999"));
+                        bool v2v3Ok = readV2V3 != null && readV2V3.officalNumber == "" && readV2V3.lastVisitDate == null;
+                        writeSteps.Add(new { step = "V2_V3.Vessel.OfficialNumberEmptyKeptAndLastVisitNullWhenBeforeFirst", passed = v2v3Ok, officalNumber = readV2V3?.officalNumber, lastVisitDate = readV2V3?.lastVisitDate });
+                        if (!v2v3Ok) allPassed = false;
+
+                        // V12, V13, V14: Survey & Certificates (read back every column of readCert)
                         var expectedExpiry = new DateTime(2028, 5, 20);
+                        var certDate1 = new DateTime(2024, 1, 1);
                         var certDoc = new ReportStatutoryCertificatesDocument
                         {
                             id = "-999",
                             projectId = -999,
-                            isExpiryDate = expectedExpiry
+                            isExpiryDate = expectedExpiry,
+                            llliIssueDate = certDate1,
+                            safetyConIssueDate = certDate1,
+                            safetyRadioIssueDate = certDate1,
+                            safetyEquipmentIssueDate = certDate1,
+                            ioppIssueDate = certDate1,
+                            iapIssueDate = certDate1,
+                            iafsIsuueDate = certDate1,
+                            ismIssueDate = certDate1,
+                            ispsIssueDate = certDate1,
+                            cargoGearReTestIssueDate = certDate1,
+                            cargoGearAnnualIssueCertificate = certDate1,
+                            ibwmIssueDate = certDate1,
+                            isppSewageIssueDate = certDate1,
+                            maritimeLabourIssueDate = certDate1,
+                            fitnessGasCertificateIssueDate = certDate1
                         };
                         await certsContainer.CreateItemAsync(certDoc, new PartitionKey("-999"));
                         cleanupList.Add((certsContainer, "-999", new PartitionKey("-999")));
@@ -10858,7 +11214,27 @@ namespace DigitalCap.Server.DevTools
                             }
                         });
                         var readCert = await SafeReadAsync<ReportStatutoryCertificatesDocument>(certsContainer, "-999", new PartitionKey("-999"));
-                        bool v12Ok = readCert != null && readCert.isExpiryDate == expectedExpiry && readCert.ieeIssueDate.HasValue;
+                        // V12: read back every column of the written docs (all columns of readCert)
+                        bool v12Ok = readCert != null
+                            && readCert.id == "-999"
+                            && readCert.projectId == -999
+                            && readCert.isExpiryDate == expectedExpiry
+                            && readCert.ieeIssueDate == new DateTime(2025, 6, 1)
+                            && readCert.llliIssueDate == certDate1
+                            && readCert.safetyConIssueDate == certDate1
+                            && readCert.safetyRadioIssueDate == certDate1
+                            && readCert.safetyEquipmentIssueDate == certDate1
+                            && readCert.ioppIssueDate == certDate1
+                            && readCert.iapIssueDate == certDate1
+                            && readCert.iafsIsuueDate == certDate1
+                            && readCert.ismIssueDate == certDate1
+                            && readCert.ispsIssueDate == certDate1
+                            && readCert.cargoGearReTestIssueDate == certDate1
+                            && readCert.cargoGearAnnualIssueCertificate == certDate1
+                            && readCert.ibwmIssueDate == certDate1
+                            && readCert.isppSewageIssueDate == certDate1
+                            && readCert.maritimeLabourIssueDate == certDate1
+                            && readCert.fitnessGasCertificateIssueDate == certDate1;
 
                         // V13: UpdateSurveyAudit with SpecialHullNo = null on update path
                         var rsdDoc = new ReportSurveyDetailsDocument
@@ -10887,36 +11263,45 @@ namespace DigitalCap.Server.DevTools
                         writeSteps.Add(new { step = "V12_V13_V14.SurveyAndCertificates", passed = certSurveyOk, v12Ok, v13Ok, v14Ok });
                         if (!certSurveyOk) allPassed = false;
 
-                        // B3 & B4: UpdateTask on CAP_ProjectTaskStatus with trimmed assignedTo (B3) and null TaskId (B4)
+                        // B3 & B4: UpdateTask on CAP_ProjectTaskStatus with 100-character cut AssignedTo (B3) and null TaskId (B4)
                         var ptsDoc = new ProjectTaskStatusDocument
                         {
                             id = "-9991",
                             ID = -9991,
                             ProjectId = -999,
                             TaskId = null, // B4: TaskId is null -> skips task lookup, sets task name null
-                            AssignedTo = "John Doe   ", // B3: trimmed to "John Doe"
+                            AssignedTo = "InitialUser",
                             StatusId = 1
                         };
                         await ptsContainer.CreateItemAsync(ptsDoc, new PartitionKey(-999.0));
                         cleanupList.Add((ptsContainer, "-9991", new PartitionKey(-999.0)));
 
+                        var longAssigned = new string('U', 110);
+                        var cutAssigned = new string('U', 100);
                         bool b3b4Res = await cosmosTaskRepo.UpdateTask(new SingleTask
                         {
                             ID = -9991,
                             ProjectId = -999,
                             TaskId = null,
-                            AssignedTo = "John Doe",
+                            AssignedTo = longAssigned,
                             StatusId = 2
                         }, "admin");
 
                         var readPts = await SafeReadAsync<ProjectTaskStatusDocument>(ptsContainer, "-9991", new PartitionKey(-999.0));
-                        bool b3b4Ok = b3b4Res && readPts != null && readPts.AssignedTo == "John Doe" && readPts.StatusId == 2;
+                        bool b3b4DocOk = b3b4Res && readPts != null && readPts.AssignedTo == cutAssigned && readPts.StatusId == 2;
 
                         var taskActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId = -999", new PartitionKey(-999.0));
                         foreach (var a in taskActs) cleanupList.Add((actContainer, a.id, new PartitionKey(-999.0)));
 
-                        writeSteps.Add(new { step = "B3_B4.Task.UpdateTask.AssignedToTrimmedAndNullTaskId", passed = b3b4Ok });
-                        if (!b3b4Ok) allPassed = false;
+                        // B4: task name null in update activity (Text == null)
+                        bool b4ActOk = taskActs.Any(a => a.Text == null && (a.CreateBy == "admin" || a.CreateBy == expectedAdminName));
+                        // B3: assignment activity uses 100-character cut AssignedTo: "Task  assigned to " + cutAssigned
+                        var expectedAssignText = "Task  assigned to " + cutAssigned;
+                        bool b3ActOk = taskActs.Any(a => a.Text == expectedAssignText);
+
+                        bool b3b4AllOk = b3b4DocOk && b4ActOk && b3ActOk;
+                        writeSteps.Add(new { step = "B3_B4.Task.UpdateTask.AssignedTo100CutAndNullTaskNameActivity", passed = b3b4AllOk, b3b4DocOk, b4ActOk, b3ActOk });
+                        if (!b3b4AllOk) allPassed = false;
 
                         // E1: UpdateTankSectionRequiredInReportAsync with imo 0 matching "   "
                         var e1TankGuid = Guid.NewGuid();
@@ -10962,7 +11347,7 @@ namespace DigitalCap.Server.DevTools
                         }
                     }
 
-                    // Extra sweep for activities created in partition -999
+                    // Extra sweep for activities created in partitions -999, -998, -99888
                     try
                     {
                         var remainingActs = await SafeQueryAsync<ActivityDocument>(actContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998, -99888)");
@@ -10975,6 +11360,20 @@ namespace DigitalCap.Server.DevTools
                         }
                     }
                     catch (Exception ex) { writeSteps.Add(new { step = "Cleanup.ActivitySweep.Error", passed = false, error = ex.Message }); }
+
+                    // Extra sweep for image descriptions created in partitions -999, -998
+                    try
+                    {
+                        var remainingDescs = await SafeQueryAsync<ImageDescriptionDocument>(descContainer, "SELECT * FROM c WHERE c.ProjectId IN (-999, -998)");
+                        foreach (var d in remainingDescs)
+                        {
+                            var pk = d.ProjectId.HasValue ? new PartitionKey((double)d.ProjectId.Value) : new PartitionKey(-999.0);
+                            try { await descContainer.DeleteItemAsync<ImageDescriptionDocument>(d.id, pk); }
+                            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+                            catch (Exception ex) { writeSteps.Add(new { step = "Cleanup.Error", id = d.id, passed = false, error = ex.Message }); }
+                        }
+                    }
+                    catch (Exception ex) { writeSteps.Add(new { step = "Cleanup.DescSweep.Error", passed = false, error = ex.Message }); }
                 }
 
                 allPassed = allPassed && !hadException
