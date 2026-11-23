@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using DigitalCap.Core.Models.ABSPlatformModel;
 using DigitalCap.WebApi.Core;
@@ -92,6 +93,16 @@ namespace DigitalCap.Infrastructure.DbContext
                     b.HasPartitionKey(x => x.RoleId);
                     b.HasNoDiscriminator();
                 });
+
+                // Cosmos DB provider does not support index definitions: remove the indexes IdentityDbContext adds
+                // (EmailIndex, UserNameIndex, RoleNameIndex). Lookups by NormalizedEmail/NormalizedUserName still work as queries.
+                foreach (var entityType in builder.Model.GetEntityTypes())
+                {
+                    foreach (var index in entityType.GetIndexes().ToList())
+                    {
+                        entityType.RemoveIndex(index);
+                    }
+                }
             }
         }
 

@@ -64,10 +64,13 @@ namespace DigitalCap.Infrastructure.Identity
                 return new List<string>();
             }
 
-            return await Context.Set<IdentityRole>()
-                .Where(r => roleIds.Contains(r.Id))
+            // EF Core Cosmos returns no rows for roleIds.Contains(r.Id) when Id is the partition key (the same query sent
+            // directly to Cosmos returns the row). Roles are few: load them and filter in memory (SQL join is case-insensitive).
+            var allRoles = await Context.Set<IdentityRole>().ToListAsync(cancellationToken);
+            return allRoles
+                .Where(r => roleIds.Contains(r.Id, StringComparer.OrdinalIgnoreCase))
                 .Select(r => r.Name!)
-                .ToListAsync(cancellationToken);
+                .ToList();
         }
 
         public override async Task<bool> IsInRoleAsync(ApplicationUser user, string normalizedRoleName, CancellationToken cancellationToken = default)
@@ -123,9 +126,12 @@ namespace DigitalCap.Infrastructure.Identity
                 return new List<ApplicationUser>();
             }
 
-            return await Context.Set<ApplicationUser>()
-                .Where(u => userIds.Contains(u.Id))
-                .ToListAsync(cancellationToken);
+            // Same EF Core Cosmos limitation as GetRolesAsync: filter in memory.
+            var userIdSet = new HashSet<string>(userIds, StringComparer.OrdinalIgnoreCase);
+            var allUsers = await Context.Set<ApplicationUser>().ToListAsync(cancellationToken);
+            return allUsers
+                .Where(u => userIdSet.Contains(u.Id))
+                .ToList();
         }
     }
 }
