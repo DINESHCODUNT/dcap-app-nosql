@@ -119,7 +119,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             // 2. UserRole links matching roleIds
             var lowerRoleIds = roleIds.Select(r => r.ToLowerInvariant()).ToList();
             var userRolesContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUserRoles);
-            var urQuery = new QueryDefinition("SELECT c.UserId, c.RoleId FROM c WHERE ARRAY_CONTAINS(@roleIds, LOWER(c.RoleId))")
+            var urQuery = new QueryDefinition("SELECT c.UserId, c.id AS RoleId FROM c WHERE ARRAY_CONTAINS(@roleIds, LOWER(c.id))")
                 .WithParameter("@roleIds", lowerRoleIds);
 
             var userRoles = new List<AspNetUserRoleDocument>();
@@ -215,7 +215,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
             // 2. UserRole links matching roleIds
             var lowerRoleIds = roleIds.Select(r => r.ToLowerInvariant()).ToList();
             var userRolesContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUserRoles);
-            var urQuery = new QueryDefinition("SELECT c.UserId, c.RoleId FROM c WHERE ARRAY_CONTAINS(@roleIds, LOWER(c.RoleId))")
+            var urQuery = new QueryDefinition("SELECT c.UserId, c.id AS RoleId FROM c WHERE ARRAY_CONTAINS(@roleIds, LOWER(c.id))")
                 .WithParameter("@roleIds", lowerRoleIds);
 
             var userRoles = new List<AspNetUserRoleDocument>();
@@ -726,7 +726,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
 
             var lowerUserIds = userIds.Select(id => id.ToLowerInvariant()).ToList();
             var container = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUserRoles);
-            var query = new QueryDefinition("SELECT c.UserId, c.RoleId FROM c WHERE ARRAY_CONTAINS(@userIds, LOWER(c.UserId))")
+            var query = new QueryDefinition("SELECT c.UserId, c.id AS RoleId FROM c WHERE ARRAY_CONTAINS(@userIds, LOWER(c.UserId))")
                 .WithParameter("@userIds", lowerUserIds);
 
             var items = new List<AspNetUserRoleDocument>();

@@ -93,7 +93,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
                     {
                         var lowerUserIds = userIds.Select(id => id.ToLowerInvariant()).ToList();
                         var userRolesContainer = ContainerFactory.GetContainer(CosmosContainers.dbo_AspNetUserRoles);
-                        var urQuery = new QueryDefinition("SELECT c.RoleId FROM c WHERE ARRAY_CONTAINS(@userIds, LOWER(c.UserId))")
+                        var urQuery = new QueryDefinition("SELECT c.id AS RoleId FROM c WHERE ARRAY_CONTAINS(@userIds, LOWER(c.UserId))")
                             .WithParameter("@userIds", lowerUserIds);
 
                         using var feed = userRolesContainer.GetItemQueryIterator<AspNetUserRoleDocument>(urQuery);

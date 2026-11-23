@@ -94,8 +94,13 @@ namespace DigitalCap.Infrastructure.Identity
             var userId = user.Id;
             var roleId = role.Id;
 
-            return await Context.Set<IdentityUserRole<string>>()
-                .AnyAsync(ur => ur.UserId == userId && ur.RoleId == roleId, cancellationToken);
+            // EF Core Cosmos AnyAsync produces SQL the emulator rejects ("Identifier 'root' could not be resolved"):
+            // read the matching link ids instead.
+            var links = await Context.Set<IdentityUserRole<string>>()
+                .Where(ur => ur.UserId == userId && ur.RoleId == roleId)
+                .Select(ur => ur.UserId)
+                .ToListAsync(cancellationToken);
+            return links.Count > 0;
         }
 
         public override async Task<IList<ApplicationUser>> GetUsersInRoleAsync(string normalizedRoleName, CancellationToken cancellationToken = default)
