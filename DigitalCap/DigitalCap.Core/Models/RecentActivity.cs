@@ -1,5 +1,4 @@
-﻿using DapperExtensions.Mapper;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -29,18 +28,6 @@ namespace DigitalCap.Core.Models
 
                 return result;
             }
-        }
-    }
-
-    public class RecentActivityMapper : ClassMapper<RecentActivity>
-    {
-        public RecentActivityMapper()
-        {
-            Table("[CAP].[FullActivities]");
-
-            Map(x => x.Description).Ignore();
-
-            AutoMap();
         }
     }
 }

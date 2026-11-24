@@ -1,5 +1,4 @@
-﻿using DapperExtensions.Mapper;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -22,22 +21,4 @@ namespace DigitalCap.Core.Models
         public int StartedTaskId { get; set; }
         public int CompletedTaskId { get; set; }
     }
-    public class TaskStatusGroupMapper : ClassMapper<TaskStatusGroup>
-    {
-        public TaskStatusGroupMapper()
-        {
-            Table("[CAP].[TaskStatusGroups]");
-            AutoMap();
-        }
-    }
-    public class TaskStatusGroupOfflineMapper : ClassMapper<TaskStatusGroupOffline>
-    {
-        public TaskStatusGroupOfflineMapper()
-        {
-            Table("[TaskStatusGroups]");
-            AutoMap();
-
-        }
-    }
-
 }

@@ -16,12 +16,9 @@ namespace DigitalCap.Infrastructure.DbContext
 {
     public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     {
-        private readonly string _connectionString;
-
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IConfiguration configuration)
             : base(options)
         {
-            _connectionString = configuration.GetConnectionString("DefaultConnection");
         }
 
         protected override void OnModelCreating(ModelBuilder builder)

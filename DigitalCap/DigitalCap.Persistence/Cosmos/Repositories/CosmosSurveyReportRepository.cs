@@ -16,8 +16,6 @@ using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 
-[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("DigitalCap.Server")]
-
 namespace DigitalCap.Persistence.Cosmos.Repositories
 {
     public class CosmosSurveyReportRepository : CosmosRepositoryBase<ProjectReportMapping>, ISurveyReportRepository

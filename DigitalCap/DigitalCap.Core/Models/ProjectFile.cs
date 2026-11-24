@@ -1,4 +1,3 @@
-using DapperExtensions.Mapper;
 using DigitalCap.Core.Enumerations;
 using Microsoft.AspNetCore.Http;
 using System;
@@ -45,16 +44,6 @@ namespace DigitalCap.Core.Models
             Name = Path.GetFileNameWithoutExtension(source.FileName);
             Extension = Path.GetExtension(source.FileName);
             MimeType = source.ContentType;
-        }
-    }
-
-    public class ProjectFileMapper : ClassMapper<ProjectFile>
-    {
-        public ProjectFileMapper()
-        {
-            Table("[CAP].[Files]");
-            Map(x => x.FullName).Ignore();
-            AutoMap();
         }
     }
 }

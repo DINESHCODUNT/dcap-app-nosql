@@ -1,5 +1,4 @@
-﻿using DapperExtensions.Mapper;
-using System;
+﻿using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -20,23 +19,5 @@ namespace DigitalCap.Core.Models
         public string Title { get; set; }
         public string Phone { get; set; }
         public string TimeZone { get; set; } = "";
-    }
-
-    public class UserAccountModelMapper : ClassMapper<UserAccountModel>
-    {
-        public UserAccountModelMapper()
-        {
-            Table("[dbo].[UserAccounts]");
-            
-            // Ignore computed property
-            Map(x => x.DisplayName).Ignore();
-            
-            // Ignore properties that don't exist in the database table
-            Map(x => x.ProfileImageUrl).Ignore();
-            Map(x => x.Email).Ignore();
-            Map(x => x.Title).Ignore();
-            
-            AutoMap();
-        }
     }
 }

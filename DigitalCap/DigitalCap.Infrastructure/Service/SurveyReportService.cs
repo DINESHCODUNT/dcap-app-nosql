@@ -17,7 +17,6 @@ using DocumentFormat.OpenXml.Spreadsheet;
 using Microsoft.AspNet.Identity;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Microsoft.Extensions.Configuration;
@@ -788,7 +787,7 @@ namespace DigitalCap.Infrastructure.Service
                 retApp.sections = sectionIdGroup;
                 return retApp;
             }
-            catch (SqlException sqlEx)
+            catch (Microsoft.Azure.Cosmos.CosmosException)
             {
 
             }
@@ -1268,7 +1267,7 @@ namespace DigitalCap.Infrastructure.Service
 
                 return ServiceResult<Report>.Success(retApp);
             }
-            catch (SqlException sqlEx)
+            catch (Microsoft.Azure.Cosmos.CosmosException)
             {
                 return ServiceResult<Report>.Failure("Error while generating report");
             }

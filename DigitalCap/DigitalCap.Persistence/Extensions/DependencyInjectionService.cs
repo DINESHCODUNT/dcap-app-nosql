@@ -23,136 +23,50 @@ namespace DigitalCap.Persistence.Extensions
         {
             services.AddCosmosInfrastructure(configuration);
 
-            // UnitOfWork
-            services.AddScoped<IUnitOfWork, UnitOfWork>();
+            // Cosmos-only build: there is no SQL. Begin/Commit/Rollback are no-ops.
+            services.AddScoped<IUnitOfWork, CosmosUnitOfWork>();
 
-            // Repositories
-            services.AddScoped<IProjectRepository, ProjectRepository>();
+            // Repositories that do not use a database
             services.AddScoped<IBlobStorageRepository, BlobStorageRepository>();
-            services.AddScoped<IClassRepository, ClassRepository>();
-            services.AddScoped<IClientRepository, ClientRepository>();
-            services.AddScoped<IDescriptionRepository, DescriptionRepository>();
-            services.AddScoped<IFileStorageRepository, FileStorageRepository>();
             services.AddScoped<IFreedomAPIRepository, FreedomAPIRepository>();
-            services.AddScoped<IGradeRepository, GradeRepository>();
-            services.AddScoped<IGradingRepository, GradingRepository>();
-            services.AddScoped<IPlatformUserRepository, PlatformUserRepository>();
-            services.AddScoped<IPortRepository, PortRepository>();
-            services.AddScoped<IReportPartRepository, ReportPartRepository>();
-            services.AddScoped<IReportRepository, ReportRepository>();
-            services.AddScoped<ISurveyReportRepository, SurveyReportRepository>();
-            services.AddScoped<ISyncRepository, SyncRepository>();
-            services.AddScoped<ITankRepository, TankRepository>();
-            services.AddScoped<ITaskRepository, TaskRepository>();
-            services.AddScoped<ITransferDataOnlinetoOfflineRepository, TransferDataOnlinetoOfflineRepository>();
-            services.AddScoped<IDataTransferDevRepository, DataTransferDevRepository>();
-            services.AddScoped<IUserAccountRepository, UserAccountRepository>();
-            services.AddScoped<IUserPermissionRepository, UserPermissionRepository>();
             services.AddScoped<IUserRepository, UserRepository>();
-            services.AddScoped<IVesselRepository, VesselRepository>();
-            services.AddScoped<IProjectReportRepository, ProjectReportRepository>();
-            services.AddScoped<IUserAccountRepository, UserAccountRepository>();
             services.AddScoped<IEmailRepository, EmailRepository>();
-            services.AddScoped<IPlatformUserRepository, PlatformUserRepository>();
-            services.AddScoped<ISecurityClientRepository, SecurityClientRepository>();
-            services.AddScoped<IExportRepository, ExportRepository>();
-            services.AddScoped<IClientProfileRepository, ClientProfileRepository>();
             services.AddScoped<IHostPathProvider, HostPathProvider>();
             services.AddScoped<IEmailService, EmailService>();
-            services.AddScoped<IEmailRepository, EmailRepository>();
             services.AddScoped<ITemplateReader, TemplateReader>();
-            services.AddScoped<IActivityRepository, ActivityRepository>();
-            services.AddScoped<ICapRepository, CapRepository>();
-            services.AddScoped<ICommentRepository, CommentRepository>();
-            services.AddScoped<ITemplateReader, TemplateReader>();
-            services.AddScoped<IManageAbsAdminRepository, ManageAbsAdminRepository>();
-            services.AddScoped<ITemplateRepository, TemplateRepository>();
 
-            var dataProviderDefault = configuration["DataProvider:Default"] ?? "Sql";
-            if (!string.Equals(dataProviderDefault, "Sql", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(dataProviderDefault, "Cosmos", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException($"DataProvider:Default must be 'Sql' or 'Cosmos' (found '{dataProviderDefault}').");
-            }
-
-            services.AddScoped<ClassRepository>();
-            services.AddScoped<PortRepository>();
-            services.AddScoped<ClientRepository>();
-            services.AddScoped<CosmosClassRepository>();
-            services.AddScoped<CosmosPortRepository>();
-            services.AddScoped<CosmosClientRepository>();
-            services.AddScoped<DigitalCap.Persistence.Cosmos.Tools.SqlToCosmosCopier>();
-            services.AddScoped<ClientProfileRepository>();
-            services.AddScoped<SecurityClientRepository>();
-            services.AddScoped<CosmosClientProfileRepository>();
-            services.AddScoped<CosmosSecurityClientRepository>();
-            services.AddScoped<UserAccountRepository>();
-            services.AddScoped<ManageAbsAdminRepository>();
-            services.AddScoped<UserPermissionRepository>();
-            services.AddScoped<CosmosUserAccountRepository>();
-            services.AddScoped<CosmosManageAbsAdminRepository>();
-            services.AddScoped<CosmosUserPermissionRepository>();
-            services.AddScoped<ActivityRepository>();
-            services.AddScoped<CommentRepository>();
-            services.AddScoped<GradeRepository>();
-            services.AddScoped<FileStorageRepository>();
-            services.AddScoped<TaskRepository>();
-            services.AddScoped<CosmosActivityRepository>();
-            services.AddScoped<CosmosCommentRepository>();
-            services.AddScoped<CosmosGradeRepository>();
-            services.AddScoped<CosmosFileStorageRepository>();
-            services.AddScoped<CosmosTaskRepository>();
+            // Cosmos helpers used by the Cosmos repositories
             services.AddScoped<CosmosActivityWriter>();
             services.AddScoped<ProjectStatusRecalculator>();
-            services.AddScoped<CapRepository>();
-            services.AddScoped<VesselRepository>();
-            services.AddScoped<ProjectRepository>();
-            services.AddScoped<CosmosCapRepository>();
-            services.AddScoped<CosmosVesselRepository>();
-            services.AddScoped<CosmosProjectRepository>();
-            services.AddScoped<CosmosTemplateRepository>();
-            services.AddScoped<CosmosProjectReportRepository>();
-            services.AddScoped<CosmosExportRepository>();
-            services.AddScoped<CosmosDescriptionRepository>();
-            services.AddScoped<GradingRepository>();
-            services.AddScoped<TankRepository>();
-            services.AddScoped<CosmosGradingRepository>();
-            services.AddScoped<CosmosTankRepository>();
-            services.AddScoped<ReportPartRepository>();
-            services.AddScoped<CosmosReportPartRepository>();
-            services.AddScoped<SurveyReportRepository>();
-            services.AddScoped<CosmosSurveyReportRepository>();
 
-            if (string.Equals(dataProviderDefault, "Cosmos", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddScoped<IClassRepository, CosmosClassRepository>();
-                services.AddScoped<IPortRepository, CosmosPortRepository>();
-                services.AddScoped<IClientRepository, CosmosClientRepository>();
-                services.AddScoped<IClientProfileRepository, CosmosClientProfileRepository>();
-                services.AddScoped<ISecurityClientRepository, CosmosSecurityClientRepository>();
-                services.AddScoped<IUserAccountRepository, CosmosUserAccountRepository>();
-                services.AddScoped<IManageAbsAdminRepository, CosmosManageAbsAdminRepository>();
-                services.AddScoped<IUserPermissionRepository, CosmosUserPermissionRepository>();
-                services.AddScoped<IActivityRepository, CosmosActivityRepository>();
-                services.AddScoped<ICommentRepository, CosmosCommentRepository>();
-                services.AddScoped<IGradeRepository, CosmosGradeRepository>();
-                services.AddScoped<IFileStorageRepository, CosmosFileStorageRepository>();
-                services.AddScoped<ITaskRepository, CosmosTaskRepository>();
-                services.AddScoped<ICapRepository, CosmosCapRepository>();
-                services.AddScoped<IVesselRepository, CosmosVesselRepository>();
-                services.AddScoped<IProjectRepository, CosmosProjectRepository>();
-                services.AddScoped<ITemplateRepository, CosmosTemplateRepository>();
-                services.AddScoped<IProjectReportRepository, CosmosProjectReportRepository>();
-                services.AddScoped<IExportRepository, CosmosExportRepository>();
-                services.AddScoped<IDescriptionRepository, CosmosDescriptionRepository>();
-                services.AddScoped<IGradingRepository, CosmosGradingRepository>();
-                services.AddScoped<ITankRepository, CosmosTankRepository>();
-                services.AddScoped<IReportPartRepository, CosmosReportPartRepository>();
-                services.AddScoped<ISurveyReportRepository, CosmosSurveyReportRepository>();
-                services.AddScoped<ISyncRepository, CosmosSyncRepository>();
-                services.AddScoped<IPlatformUserRepository, CosmosPlatformUserRepository>();
-                services.AddScoped<ITransferDataOnlinetoOfflineRepository, CosmosTransferDataOnlinetoOfflineRepository>();
-            }
+            // Cosmos repositories (the only data access)
+            services.AddScoped<IClassRepository, CosmosClassRepository>();
+            services.AddScoped<IPortRepository, CosmosPortRepository>();
+            services.AddScoped<IClientRepository, CosmosClientRepository>();
+            services.AddScoped<IClientProfileRepository, CosmosClientProfileRepository>();
+            services.AddScoped<ISecurityClientRepository, CosmosSecurityClientRepository>();
+            services.AddScoped<IUserAccountRepository, CosmosUserAccountRepository>();
+            services.AddScoped<IManageAbsAdminRepository, CosmosManageAbsAdminRepository>();
+            services.AddScoped<IUserPermissionRepository, CosmosUserPermissionRepository>();
+            services.AddScoped<IActivityRepository, CosmosActivityRepository>();
+            services.AddScoped<ICommentRepository, CosmosCommentRepository>();
+            services.AddScoped<IGradeRepository, CosmosGradeRepository>();
+            services.AddScoped<IFileStorageRepository, CosmosFileStorageRepository>();
+            services.AddScoped<ITaskRepository, CosmosTaskRepository>();
+            services.AddScoped<ICapRepository, CosmosCapRepository>();
+            services.AddScoped<IVesselRepository, CosmosVesselRepository>();
+            services.AddScoped<IProjectRepository, CosmosProjectRepository>();
+            services.AddScoped<ITemplateRepository, CosmosTemplateRepository>();
+            services.AddScoped<IProjectReportRepository, CosmosProjectReportRepository>();
+            services.AddScoped<IExportRepository, CosmosExportRepository>();
+            services.AddScoped<IDescriptionRepository, CosmosDescriptionRepository>();
+            services.AddScoped<IGradingRepository, CosmosGradingRepository>();
+            services.AddScoped<ITankRepository, CosmosTankRepository>();
+            services.AddScoped<IReportPartRepository, CosmosReportPartRepository>();
+            services.AddScoped<ISurveyReportRepository, CosmosSurveyReportRepository>();
+            services.AddScoped<ISyncRepository, CosmosSyncRepository>();
+            services.AddScoped<IPlatformUserRepository, CosmosPlatformUserRepository>();
+            services.AddScoped<ITransferDataOnlinetoOfflineRepository, CosmosTransferDataOnlinetoOfflineRepository>();
             services.AddHttpClient(); // Add this
             services.AddScoped<IHttpService, HttpService>();
             // Services
