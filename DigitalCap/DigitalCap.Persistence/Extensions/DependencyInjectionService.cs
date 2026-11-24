@@ -149,6 +149,9 @@ namespace DigitalCap.Persistence.Extensions
                 services.AddScoped<ITankRepository, CosmosTankRepository>();
                 services.AddScoped<IReportPartRepository, CosmosReportPartRepository>();
                 services.AddScoped<ISurveyReportRepository, CosmosSurveyReportRepository>();
+                services.AddScoped<ISyncRepository, CosmosSyncRepository>();
+                services.AddScoped<IPlatformUserRepository, CosmosPlatformUserRepository>();
+                services.AddScoped<ITransferDataOnlinetoOfflineRepository, CosmosTransferDataOnlinetoOfflineRepository>();
             }
             services.AddHttpClient(); // Add this
             services.AddScoped<IHttpService, HttpService>();

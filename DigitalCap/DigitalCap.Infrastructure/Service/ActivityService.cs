@@ -23,10 +23,10 @@ namespace DigitalCap.Infrastructure.Service
             {
                 var activities = await _activityRepository.GetRecentActivitiesAsync(take);
 
+                // No activities is a normal case (e.g. a new database): return an empty list, not a failure (was 400 Bad Request).
                 if (activities == null || !activities.Any())
                 {
-                    return ServiceResult<List<RecentActivity>>
-                        .Failure("No recent activities found.");
+                    return ServiceResult<List<RecentActivity>>.SuccessResult(new List<RecentActivity>(), "No recent activities found.");
                 }
 
                 return ServiceResult<List<RecentActivity>>.SuccessResult(activities, "Recent activities fetched successfully.");
