@@ -6,9 +6,6 @@ using DigitalCap.Infrastructure.Service;
 using DigitalCap.Persistence.Cosmos.Infrastructure;
 using DigitalCap.Persistence.Cosmos.Repositories;
 using DigitalCap.Persistence.Repositories;
-using DinkToPdf;
-using DinkToPdf.Contracts;
-using Microsoft.AspNet.Identity.EntityFramework;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -22,9 +19,6 @@ namespace DigitalCap.Persistence.Extensions
         public static IServiceCollection AddPersistenceServices(this IServiceCollection services, IConfiguration configuration)
         {
             services.AddCosmosInfrastructure(configuration);
-
-            // Cosmos-only build: there is no SQL. Begin/Commit/Rollback are no-ops.
-            services.AddScoped<IUnitOfWork, CosmosUnitOfWork>();
 
             // Repositories that do not use a database
             services.AddScoped<IBlobStorageRepository, BlobStorageRepository>();
@@ -46,7 +40,6 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<IClientProfileRepository, CosmosClientProfileRepository>();
             services.AddScoped<ISecurityClientRepository, CosmosSecurityClientRepository>();
             services.AddScoped<IUserAccountRepository, CosmosUserAccountRepository>();
-            services.AddScoped<IManageAbsAdminRepository, CosmosManageAbsAdminRepository>();
             services.AddScoped<IUserPermissionRepository, CosmosUserPermissionRepository>();
             services.AddScoped<IActivityRepository, CosmosActivityRepository>();
             services.AddScoped<ICommentRepository, CosmosCommentRepository>();
@@ -78,7 +71,6 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<ISecurityClientService, SecurityClientService>();
             services.AddScoped<IUserAccountService, UserAccountService>();
             services.AddScoped<ITankService, TankService>();
-            services.AddScoped<IUserAccountService, UserAccountService>();
             services.AddScoped<IDescriptionService, DescriptionService>();
             services.AddScoped<IExportService, ExportService>();
             services.AddScoped<IReportService, ReportService>();
@@ -95,20 +87,12 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<ITaskService, TaskService>();
             services.AddScoped<IFileStorageService, FileStorageService>();
             services.AddScoped<ITemplateService, TemplateService>();
-            services.AddScoped<IUser, CurrentUser>();
             services.AddScoped<PermissionAuthorizationFilter>();
             services.AddScoped<IAsposePdfService, AsposePdfService>();
             services.AddScoped<IProjectReportService, ProjectReportService>();
             services.AddScoped<IConfigurationService, ConfigurationService>();
-            services.AddScoped<IUserAccountService, UserAccountService>();
-            services.AddScoped<ISecurityClientService, SecurityClientService>();
             services.AddScoped<IPlatformUserService, PlatformUserService>();
             services.AddScoped<IPortService, PortService>();
-            services.AddScoped<IEmailService, EmailService>();
-            services.AddScoped<IManageAbsAdminService, ManageAbsAdminService>();
-            services.AddSingleton(typeof(IConverter), new SynchronizedConverter(new PdfTools()));
-            // Register PermissionAuthorizationFilter - it will get IUser from DI
-            services.AddScoped<PermissionAuthorizationFilter>();
 
             // Register IUser factory - provides IUser from current HttpContext
             // Note: Using GetAwaiter().GetResult() is acceptable in DI registration context

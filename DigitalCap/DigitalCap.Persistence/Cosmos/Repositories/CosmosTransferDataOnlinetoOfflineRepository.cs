@@ -97,7 +97,7 @@ namespace DigitalCap.Persistence.Cosmos.Repositories
         public UserAccountModel First(Expression<Func<UserAccountModel, bool>> filter) => throw new NotSupportedException("TransferDataOnlinetoOfflineRepository.First is not used by the app and is not converted to Cosmos.");
         public IQueryable<UserAccountModel> ExecuteQuery(string sql) => throw new NotSupportedException("TransferDataOnlinetoOfflineRepository.ExecuteQuery is not used by the app and is not converted to Cosmos.");
         public IQueryable<UserAccountModel> ExecuteQuery(string sql, object[] parameters) => throw new NotSupportedException("TransferDataOnlinetoOfflineRepository.ExecuteQuery is not used by the app and is not converted to Cosmos.");
-        // Cosmos saves each write immediately: Commit/Rollback have nothing to do (same as CosmosUnitOfWork).
+        // Cosmos saves each write immediately: Commit/Rollback have nothing to do.
         public void Rollback() { }
         public void Commit() { }
         #endregion

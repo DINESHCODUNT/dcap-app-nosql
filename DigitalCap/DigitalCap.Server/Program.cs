@@ -4,7 +4,6 @@ using DigitalCap.Infrastructure.Identity;
 using DigitalCap.Persistence.Cosmos.Configuration;
 using DigitalCap.Persistence.Cosmos.Infrastructure;
 using DigitalCap.Persistence.Extensions;
-using DigitalCap.Server.DevTools;
 using DigitalCap.WebApi.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -54,12 +53,7 @@ builder.Services.Configure<OpenIdConnectOptions>(options =>
     options.TokenValidationParameters.NameClaimType = ClaimTypes.Upn;
 });
 
-var identityProvider = builder.Configuration["Identity:Provider"] ?? "Sql";
-var useCosmosIdentity = string.Equals(identityProvider, "Cosmos", StringComparison.OrdinalIgnoreCase);
-
-if (useCosmosIdentity)
-{
-    var cosmosSection = builder.Configuration.GetSection("CosmosDb");
+var cosmosSection = builder.Configuration.GetSection("CosmosDb");
     var cosmosOptions = cosmosSection.Get<CosmosDbOptions>()
         ?? throw new InvalidOperationException("Missing configuration section 'CosmosDb'.");
 
@@ -120,12 +114,6 @@ if (useCosmosIdentity)
                 ConfigureCosmos);
         }
     });
-}
-else
-{
-    builder.Services.AddDbContext<ApplicationDbContext>(options =>
-        options.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
-}
 
 
 var adAudience = configuration["AzureAd:Audience"] ?? "d8a3a596-6fcc-4047-ac76-d990b30f1bb0";
@@ -217,42 +205,22 @@ builder.Services.AddAuthentication(options =>
         }
     };
 });
-if (useCosmosIdentity)
-{
-    builder.Services.AddIdentityCore<ApplicationUser>(options =>
-        {
-            options.SignIn.RequireConfirmedAccount = false;
-            options.Password.RequireDigit = false;
-            options.Password.RequiredLength = 3;
-            options.Password.RequireLowercase = false;
-            options.Password.RequireNonAlphanumeric = false;
-            options.Password.RequiredUniqueChars = 0;
-            options.Password.RequireUppercase = false;
-        })
-        .AddRoles<IdentityRole>()
-        .AddSignInManager()
-        .AddEntityFrameworkStores<ApplicationDbContext>()
-        .AddUserStore<CosmosUserStore>()
-        .AddRoleStore<CosmosRoleStore>()
-        .AddDefaultTokenProviders();
-}
-else
-{
-    builder.Services.AddIdentityCore<ApplicationUser>(options =>
-        {
-            options.SignIn.RequireConfirmedAccount = false;
-            options.Password.RequireDigit = false;
-            options.Password.RequiredLength = 3;
-            options.Password.RequireLowercase = false;
-            options.Password.RequireNonAlphanumeric = false;
-            options.Password.RequiredUniqueChars = 0;
-            options.Password.RequireUppercase = false;
-        })
-        .AddRoles<IdentityRole>()
-        .AddSignInManager()
-        .AddEntityFrameworkStores<ApplicationDbContext>()
-        .AddDefaultTokenProviders();
-}
+builder.Services.AddIdentityCore<ApplicationUser>(options =>
+    {
+        options.SignIn.RequireConfirmedAccount = false;
+        options.Password.RequireDigit = false;
+        options.Password.RequiredLength = 3;
+        options.Password.RequireLowercase = false;
+        options.Password.RequireNonAlphanumeric = false;
+        options.Password.RequiredUniqueChars = 0;
+        options.Password.RequireUppercase = false;
+    })
+    .AddRoles<IdentityRole>()
+    .AddSignInManager()
+    .AddEntityFrameworkStores<ApplicationDbContext>()
+    .AddUserStore<CosmosUserStore>()
+    .AddRoleStore<CosmosRoleStore>()
+    .AddDefaultTokenProviders();
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
@@ -351,11 +319,6 @@ app.MapGet("/health/cosmos", async (
         return Results.Json(new { status = "Unhealthy" }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 }).AllowAnonymous();
-
-if (app.Environment.IsDevelopment())
-{
-    app.MapCosmosDevEndpoints();
-}
 
 app.MapFallbackToFile("/index.html");
 
