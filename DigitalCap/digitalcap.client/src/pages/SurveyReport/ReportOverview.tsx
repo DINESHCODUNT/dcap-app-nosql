@@ -3,7 +3,6 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import { BreadcrumbBar, Button, BUTTONS, NotificationContainer } from "customer_portal-ui-shared";
 import * as Icon from 'react-bootstrap-icons';
 import Dropdown from 'react-bootstrap/Dropdown';
-import Modal from 'react-bootstrap/Modal';
 import Offcanvas from 'react-bootstrap/Offcanvas';
 import ReportSidebar from './ReportSidebar';
 import ReportContent from './ReportContent';
@@ -22,10 +21,7 @@ import { usePopup } from '../../Common/PopupProvider';
 import { ExportConfigurationModal } from './ExportConfigurationModal';
 import { ExportAllConfigurationModal } from './ExportAllConfigurationModal';
 import { EMPTY_GUID } from '../../utils/exportSettings';
-import { DESKTOP_URL, getFreshToken } from '../../utils/desktop';
-import { measureConnectionSpeed, isNetworkConnectionError } from '../../utils/connectionSpeed';
 import { toFriendlyErrorMessage } from '../../utils/errorMessage';
-import TransferProgressBar from "../../Common/TransferProgressBar";
 function UnsavedConfirmationModal({
     message,
     isLoading,
@@ -124,149 +120,6 @@ const ReportOverview: React.FC = () => {
         isMountedRef.current = true;
         return () => { isMountedRef.current = false; };
     }, []);
-
-    const [showDiscardOfflineWarning] = useState(false);
-
-    const isElectronUserAgent = typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("electron");
-    const [showDownloadConfirm, setShowDownloadConfirm] = useState(false);
-    const [showDownloadProcessing, setShowDownloadProcessing] = useState(false);
-    const [downloadAbortController, setDownloadAbortController] = useState<AbortController | null>(null);
-    const [downloadError, setDownloadError] = useState<string | null>(null);
-    const [isDownloadInBackground, setIsDownloadInBackground] = useState<boolean>(false);
-    const [downloadSuccessModal, setDownloadSuccessModal] = useState<boolean>(false);
-    const [isCheckingSpeed, setIsCheckingSpeed] = useState<boolean>(false);
-    const [downloadPercent, setDownloadPercent] = useState<number>(0);
-    const downloadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-    useEffect(() => {
-        return () => {
-            if (downloadPollRef.current) {
-                clearInterval(downloadPollRef.current);
-                downloadPollRef.current = null;
-            }
-        };
-    }, []);
-
-    const handleDownloadOfflineProceed = async () => {
-        setShowDownloadConfirm(false);
-        setShowDownloadProcessing(true);
-        setDownloadError(null);
-        setIsDownloadInBackground(false);
-        setDownloadPercent(0);
-
-        if (downloadPollRef.current) {
-            clearInterval(downloadPollRef.current);
-            downloadPollRef.current = null;
-        }
-
-        const controller = new AbortController();
-        setDownloadAbortController(controller);
-
-        try {
-            const token = await getFreshToken();
-
-            downloadPollRef.current = setInterval(async () => {
-                try {
-                    const res = await fetch(`${DESKTOP_URL}/api/DataTransferAPI/Progress?projectId=${projectId}`, {
-                        headers: {
-                            "Authorization": `Bearer ${token}`
-                        }
-                    });
-                    if (res.ok) {
-                        const prog = await res.json();
-                        if (typeof prog?.percent === 'number') {
-                            setDownloadPercent(prog.percent);
-                        }
-                    }
-                } catch {
-                    // ignore polling errors
-                }
-            }, 500);
-
-            const response = await fetch(`${DESKTOP_URL}/api/DataTransferAPI/Download?projectId=${projectId}`, {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${token}`
-                },
-                signal: controller.signal
-            });
-
-            if (downloadPollRef.current) {
-                clearInterval(downloadPollRef.current);
-                downloadPollRef.current = null;
-            }
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(toFriendlyErrorMessage(errorText, "Download failed"));
-            }
-
-            setDownloadPercent(100);
-            setShowDownloadProcessing(false);
-            setIsDownloadInBackground(false);
-            setDownloadSuccessModal(true);
-
-            const freshToken = (await getFreshToken()) || token;
-            setTimeout(() => {
-                window.location.href = `${DESKTOP_URL}/SetToken#token=${encodeURIComponent(freshToken)}&redirectURL=${encodeURIComponent("/app/Project")}`;
-            }, 2000);
-        } catch (err: any) {
-            if (downloadPollRef.current) {
-                clearInterval(downloadPollRef.current);
-                downloadPollRef.current = null;
-            }
-            setDownloadPercent(0);
-            if (err?.name !== "AbortError") {
-                console.error("Offline download failed", err);
-                if (err instanceof TypeError || err?.name === "TypeError") {
-                    popup.error("Unable to reach the DigitalCAP desktop application. Please make sure it is installed and running, then try again.", "Download Offline");
-                } else if (isNetworkConnectionError(err)) {
-                    popup.info({
-                        title: "Connection Error",
-                        message: "The download/upload process has been interrupted due to a loss of network connection. Please check your internet connection and try again.",
-                        okText: "Close"
-                    });
-                } else {
-                    setDownloadError(toFriendlyErrorMessage(err?.message, "Download failed. Please try again."));
-                }
-            }
-            setShowDownloadProcessing(false);
-            setIsDownloadInBackground(false);
-        } finally {
-            setDownloadAbortController(null);
-        }
-    };
-
-    const handleStopDownload = () => {
-        if (downloadPollRef.current) {
-            clearInterval(downloadPollRef.current);
-            downloadPollRef.current = null;
-        }
-        setDownloadPercent(0);
-        setIsDownloadInBackground(false);
-        if (downloadAbortController) {
-            downloadAbortController.abort();
-        }
-        setShowDownloadProcessing(false);
-        setDownloadAbortController(null);
-    };
-
-    const handleDownloadOfflineClick = async () => {
-        setIsCheckingSpeed(true);
-        try {
-            const mbps = await measureConnectionSpeed();
-            if (mbps === null || mbps <= 4) {
-                popup.info(
-                    "Unable to Sync/Download due to a very low internet connection. Please proceed when your internet connection is having at least 10 mbps download and upload speed.",
-                    "Confirm"
-                );
-                return;
-            }
-            setShowDownloadConfirm(true);
-        } finally {
-            setIsCheckingSpeed(false);
-        }
-    };
 
     const [activeView, setActiveView] = useState<{
         part: string;
@@ -1428,18 +1281,6 @@ const ReportOverview: React.FC = () => {
                         </ul>
                     </div>
                 )}
-                {showDiscardOfflineWarning && (
-                    <div className="alert alert-danger mb-2" role="alert" style={{ margin: "0 20px", fontSize: 16 }}>
-                        <ul className="mb-0">
-                            <li>
-                                <p className="mb-0">
-                                    The CAP Administrator has discarded your offline project. Any changes made in this
-                                    project will not be synchronized with the online application.
-                                </p>
-                            </li>
-                        </ul>
-                    </div>
-                )}
 
                 <BreadcrumbBar
                     pageName="Report Overview"
@@ -1478,16 +1319,6 @@ const ReportOverview: React.FC = () => {
                             </Dropdown.Menu>
                         </Dropdown>
 
-                        {isElectronUserAgent && data?.synchedOnline == null && (
-                            <Button
-                                variant={BUTTONS.SECONDARY}
-                                onClick={handleDownloadOfflineClick}
-                                disabled={showDownloadProcessing || isCheckingSpeed}
-                                style={{ marginLeft: "8px" }}
-                            >
-                                Download Offline
-                            </Button>
-                        )}
                         {data?.synchedOnline != null && hasRole(ROLES.ADMIN_CAP_HQ) && (
                             <Button
                                 variant={BUTTONS.SECONDARY}
@@ -1641,166 +1472,6 @@ const ReportOverview: React.FC = () => {
                 </div>
 
             </div>
-
-            {/* PDF EXPORT */}
-            {showDownloadConfirm && (
-                <Modal
-                    show={showDownloadConfirm}
-                    onHide={() => setShowDownloadConfirm(false)}
-                    centered
-                    aria-labelledby="downloadconfirmlabel"
-                >
-                    <Modal.Header closeButton>
-                        <Modal.Title id="downloadconfirmlabel">Confirm</Modal.Title>
-                    </Modal.Header>
-                    <Modal.Body>
-                        <div className="row">
-                            <div className="col-md-12 modal-alert">
-                                <div className="alert-content">
-                                    <h5>Are you sure?</h5>
-                                    <p className="mb-0">
-                                        Download offline mode which include all parts, <br />
-                                        Do you want to continue this?
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    </Modal.Body>
-                    <Modal.Footer className="gap-2">
-                        <Button
-                            variant={BUTTONS.SECONDARY}
-                            onClick={() => setShowDownloadConfirm(false)}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            variant={BUTTONS.SECONDARY}
-                            onClick={handleDownloadOfflineProceed}
-                        >
-                            Yes, Proceed
-                        </Button>
-                    </Modal.Footer>
-                </Modal>
-            )}
-
-            {showDownloadProcessing && (
-                <Modal
-                    show={showDownloadProcessing}
-                    onHide={handleStopDownload}
-                    centered
-                    backdrop="static"
-                    keyboard={false}
-                    aria-labelledby="downloadprocessinglabel"
-                >
-                    <Modal.Header closeButton>
-                        <Modal.Title id="downloadprocessinglabel">Download Offline</Modal.Title>
-                    </Modal.Header>
-                    <Modal.Body>
-                        <div className="row">
-                            <div className="col-md-12 modal-alert">
-                                <div className="alert-content">
-                                    <h5>Downloading the {data?.projectName || 'project'} project in Offline Mode</h5>
-                                    <div className="downloadprogressbar mt-3">
-                                        <TransferProgressBar percent={downloadPercent} height="20px" variant="bg-primary" />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </Modal.Body>
-                    <Modal.Footer className="gap-2">
-                        <Button
-                            variant={BUTTONS.SECONDARY}
-                            onClick={handleStopDownload}
-                        >
-                            No, Cancel
-                        </Button>
-                        <Button
-                            variant={BUTTONS.SECONDARY}
-                            onClick={() => {
-                                setShowDownloadProcessing(false);
-                                setIsDownloadInBackground(true);
-                            }}
-                        >
-                            Download in Background
-                        </Button>
-                    </Modal.Footer>
-                </Modal>
-            )}
-
-            {isDownloadInBackground && (
-                <div className="minimize-section" style={{ position: 'fixed', bottom: '20px', right: '20px', zIndex: 1050 }}>
-                    <div className="minimize-card card shadow" style={{ minWidth: '320px', backgroundColor: '#fff', border: '1px solid #dee2e6', borderRadius: '8px' }}>
-                        <div className="card-body p-3">
-                            <div className="d-flex align-items-center gap-3">
-                                <div className="img-wrapper">
-                                    <Icon.Download className="download-icon text-primary" size={20} />
-                                </div>
-                                <div className="alert-content flex-grow-1">
-                                    <h6 className="mb-1" style={{ fontSize: '14px', fontWeight: 600 }}>Download Offline is Inprogress</h6>
-                                    <TransferProgressBar percent={downloadPercent} height="6px" variant="bg-primary" />
-                                </div>
-                            </div>
-                            <div className="actions d-flex justify-content-end gap-2 mt-2" style={{ gap: '8px' }}>
-                                <button type="button" className="btn btn-sm btn-light" onClick={handleStopDownload}> No, Cancel </button>
-                                <button type="button" className="btn btn-sm btn-light" onClick={() => { setIsDownloadInBackground(false); setShowDownloadProcessing(true); }}>
-                                    <Icon.ArrowsAngleExpand />
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {downloadSuccessModal && (
-                <Modal
-                    show={downloadSuccessModal}
-                    onHide={() => {
-                        setDownloadSuccessModal(false);
-                        getFreshToken().then((tok) => {
-                            window.location.href = `${DESKTOP_URL}/SetToken#token=${encodeURIComponent(tok)}&redirectURL=${encodeURIComponent("/app/Project")}`;
-                        });
-                    }}
-                    centered
-                >
-                    <Modal.Header closeButton>
-                        <Modal.Title>Success</Modal.Title>
-                    </Modal.Header>
-                    <Modal.Body>
-                        <p className="mb-0">
-                            Download completed successfully
-                        </p>
-                    </Modal.Body>
-                    <Modal.Footer>
-                        <Button
-                            variant={BUTTONS.PRIMARY}
-                            onClick={() => {
-                                setDownloadSuccessModal(false);
-                                getFreshToken().then((tok) => {
-                                    window.location.href = `${DESKTOP_URL}/SetToken#token=${encodeURIComponent(tok)}&redirectURL=${encodeURIComponent("/app/Project")}`;
-                                });
-                            }}
-                        >
-                            Ok
-                        </Button>
-                    </Modal.Footer>
-                </Modal>
-            )}
-
-            {downloadError && (
-                <Modal show={Boolean(downloadError)} onHide={() => setDownloadError(null)} centered>
-                    <Modal.Header closeButton>
-                        <Modal.Title>Error</Modal.Title>
-                    </Modal.Header>
-                    <Modal.Body>
-                        <p>{downloadError}</p>
-                    </Modal.Body>
-                    <Modal.Footer>
-                        <Button variant={BUTTONS.SECONDARY} onClick={() => setDownloadError(null)}>
-                            Close
-                        </Button>
-                    </Modal.Footer>
-                </Modal>
-            )}
 
             <NotificationContainer position="bottom-right" />
 
