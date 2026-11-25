@@ -1,5 +1,4 @@
-﻿using DapperExtensions.Mapper;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -22,25 +21,5 @@ namespace DigitalCap.Core.Models
         public string PocEmail { get; set; }
         public string PocPhone { get; set; }
         public bool Deleted { get; set; }
-    }
-
-    public class ClientMapper : ClassMapper<Client>
-    {
-        public ClientMapper()
-        {
-            Table("[CAP].[Clients]");
-
-            Map(x => x.BillSameAsCapClient).Ignore();
-            Map(x => x.BillToCompanyName).Ignore();
-            Map(x => x.BillToCompanyAddress).Ignore();
-            Map(x => x.BillToCompanyEmail).Ignore();
-            Map(x => x.BillToCompanyBillingUrl).Ignore();
-            Map(x => x.PocName).Ignore();
-            Map(x => x.PocEmail).Ignore();
-            Map(x => x.PocPhone).Ignore();
-            Map(x => x.Deleted).Ignore();
-
-            AutoMap();
-        }
     }
 }

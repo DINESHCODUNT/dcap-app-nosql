@@ -33,9 +33,9 @@ const RecentActivityOverview: React.FC = () => {
         try {
             let response;
             if (projectId > 0) {
-                response = await projectService.GetAllActivities2ByProjectId(false, projectId);
+                response = await projectService.GetAllActivities2ByProjectId(projectId);
             } else {
-                response = await projectService.GetRecentActivities2(false, 0);
+                response = await projectService.GetRecentActivities2(0);
             }
 
             if (requestIdRef.current !== currentRequestId) return;

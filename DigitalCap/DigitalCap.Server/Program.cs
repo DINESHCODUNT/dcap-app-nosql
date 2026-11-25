@@ -1,11 +1,16 @@
 using Azure.Identity;
 using DigitalCap.Infrastructure.DbContext;
+using DigitalCap.Infrastructure.Identity;
+using DigitalCap.Persistence.Cosmos.Configuration;
+using DigitalCap.Persistence.Cosmos.Infrastructure;
 using DigitalCap.Persistence.Extensions;
 using DigitalCap.WebApi.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Azure.Cosmos;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
 
@@ -48,8 +53,67 @@ builder.Services.Configure<OpenIdConnectOptions>(options =>
     options.TokenValidationParameters.NameClaimType = ClaimTypes.Upn;
 });
 
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
+var cosmosSection = builder.Configuration.GetSection("CosmosDb");
+    var cosmosOptions = cosmosSection.Get<CosmosDbOptions>()
+        ?? throw new InvalidOperationException("Missing configuration section 'CosmosDb'.");
+
+    if (string.IsNullOrWhiteSpace(cosmosOptions.Endpoint))
+    {
+        throw new InvalidOperationException("Cosmos DB configuration is missing 'CosmosDb:Endpoint'.");
+    }
+
+    if (!cosmosOptions.UseManagedIdentity && string.IsNullOrWhiteSpace(cosmosOptions.Key))
+    {
+        throw new InvalidOperationException("Cosmos DB configuration is missing 'CosmosDb:Key'.");
+    }
+
+    if (string.IsNullOrWhiteSpace(cosmosOptions.DatabaseName))
+    {
+        throw new InvalidOperationException("Cosmos DB configuration is missing 'CosmosDb:DatabaseName'.");
+    }
+
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    {
+        void ConfigureCosmos(Microsoft.EntityFrameworkCore.Infrastructure.CosmosDbContextOptionsBuilder cosmosBuilder)
+        {
+            if (cosmosOptions.UseEmulator)
+            {
+                cosmosBuilder.ConnectionMode(Microsoft.Azure.Cosmos.ConnectionMode.Gateway);
+                cosmosBuilder.LimitToEndpoint();
+
+                var uri = new Uri(cosmosOptions.Endpoint);
+                if (string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+                {
+                    cosmosBuilder.HttpClientFactory(() => new HttpClient(new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                    }));
+                }
+            }
+            else
+            {
+                cosmosBuilder.ConnectionMode(Microsoft.Azure.Cosmos.ConnectionMode.Direct);
+            }
+        }
+
+        if (cosmosOptions.UseManagedIdentity)
+        {
+            options.UseCosmos(
+                cosmosOptions.Endpoint,
+                new DefaultAzureCredential(),
+                cosmosOptions.DatabaseName,
+                ConfigureCosmos);
+        }
+        else
+        {
+            options.UseCosmos(
+                cosmosOptions.Endpoint,
+                cosmosOptions.Key,
+                cosmosOptions.DatabaseName,
+                ConfigureCosmos);
+        }
+    });
 
 
 var adAudience = configuration["AzureAd:Audience"] ?? "d8a3a596-6fcc-4047-ac76-d990b30f1bb0";
@@ -154,6 +218,8 @@ builder.Services.AddIdentityCore<ApplicationUser>(options =>
     .AddRoles<IdentityRole>()
     .AddSignInManager()
     .AddEntityFrameworkStores<ApplicationDbContext>()
+    .AddUserStore<CosmosUserStore>()
+    .AddRoleStore<CosmosRoleStore>()
     .AddDefaultTokenProviders();
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
@@ -175,6 +241,84 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+app.MapGet("/health/cosmos", async (
+    IServiceProvider serviceProvider,
+    IOptions<CosmosDbOptions> cosmosOptions,
+    IWebHostEnvironment env) =>
+{
+    var options = cosmosOptions.Value;
+    double totalRequestCharge = 0;
+    try
+    {
+        var cosmosClient = serviceProvider.GetRequiredService<CosmosClient>();
+        var db = cosmosClient.GetDatabase(options.DatabaseName);
+        var dbResponse = await db.ReadAsync();
+        totalRequestCharge += dbResponse.RequestCharge;
+
+        var existingContainers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var iterator = db.GetContainerQueryIterator<ContainerProperties>();
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync();
+            totalRequestCharge += page.RequestCharge;
+            foreach (var container in page)
+            {
+                existingContainers.Add(container.Id);
+            }
+        }
+
+        var missingContainers = CosmosContainers.PartitionKeys.Keys
+            .Where(name => !existingContainers.Contains(name))
+            .ToList();
+
+        bool sysCountersFound = existingContainers.Contains(CosmosContainers.sys_Counters);
+
+        if (missingContainers.Count > 0)
+        {
+            if (env.IsDevelopment())
+            {
+                return Results.Json(new
+                {
+                    status = "Unhealthy",
+                    reason = $"Missing {missingContainers.Count} containers in database '{options.DatabaseName}'.",
+                    database = options.DatabaseName,
+                    containerCount = existingContainers.Count,
+                    missingContainers,
+                    sysCountersFound,
+                    requestCharge = totalRequestCharge
+                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Json(new { status = "Unhealthy" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        return Results.Ok(new
+        {
+            status = "Healthy",
+            database = options.DatabaseName,
+            containerCount = existingContainers.Count,
+            missingContainers,
+            sysCountersFound,
+            requestCharge = totalRequestCharge
+        });
+    }
+    catch (Exception ex)
+    {
+        if (env.IsDevelopment())
+        {
+            return Results.Json(new
+            {
+                status = "Unhealthy",
+                error = ex.Message,
+                database = options.DatabaseName,
+                requestCharge = totalRequestCharge
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        return Results.Json(new { status = "Unhealthy" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+}).AllowAnonymous();
 
 app.MapFallbackToFile("/index.html");
 

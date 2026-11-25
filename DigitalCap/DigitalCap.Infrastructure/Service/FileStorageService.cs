@@ -17,18 +17,15 @@ namespace DigitalCap.Infrastructure.Service
     {
         private readonly IFileStorageRepository _fileStorageRepository;
         private readonly IBlobStorageRepository _blobStorageRepository;
-        private readonly IUnitOfWork _unitOfWork;
         private readonly IEmailService _emailService;
 
         public FileStorageService(
             IFileStorageRepository fileStorageRepository,
             IBlobStorageRepository blobStorageRepository,
-            IUnitOfWork unitOfWork,
             IEmailService emailService)
         {
             _fileStorageRepository = fileStorageRepository;
             _blobStorageRepository = blobStorageRepository;
-            _unitOfWork = unitOfWork;
             _emailService = emailService;
         }
 

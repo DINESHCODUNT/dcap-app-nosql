@@ -55,11 +55,9 @@ export interface CommentsViewModel {
 export function getComments(
     projectId: number,
     projectTaskId: number,
-    notes?: string,
-    isElectron: boolean = false
+    notes?: string
 ): Promise<AxiosResponse<Comment[]>> {
-    const controller = isElectron ? "Offline" : "Comment";
-    const routePath = `/api/${controller}/GetComments`;
+    const routePath = `/api/Comment/GetComments`;
 
     return axiosInstance.get(routePath, {
         params: {

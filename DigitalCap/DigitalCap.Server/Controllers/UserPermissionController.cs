@@ -1,7 +1,6 @@
 ﻿using DigitalCap.Core.Interfaces.Repository;
 using DigitalCap.Core.Interfaces.Service;
 using DigitalCap.Core.Models.Permissions;
-using DigitalCap.Persistence.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;

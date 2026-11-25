@@ -137,7 +137,8 @@ namespace DigitalCap.Infrastructure.Service
                 return;
 
             user.Roles = (await _userManager.GetRolesAsync(user)).ToList();
-            var userRoles = _roleManager.Roles.Where(x => user.Roles.Contains(x.Name)).ToList();
+            // Cosmos DB does not allow synchronous queries: use ToListAsync
+            var userRoles = await _roleManager.Roles.Where(x => user.Roles.Contains(x.Name)).ToListAsync();
             var permissions = new List<Permission>();
 
             foreach (var currentRole in userRoles)

@@ -5,8 +5,6 @@ const SURVEY_REPORT_API = "/api/SurveyReport";
 const SURVEY_PROJECT_API = "/api/Survey";
 const TANK_API = "/api/Tank";
 
-const OFFLINE_REPORT_API = "/Offline";
-const OFFLINE_PROJECT_API = "/OfflineSurvey";
 export interface SurveyReportIndexResponse {
     reportPartGrid: any[];
     projectId: number;
@@ -15,16 +13,16 @@ export interface SurveyReportIndexResponse {
 export interface SurveyReportDataResponse {
     data: any;
 }
-function surveyReportBase(isOffline: boolean): string {
-    return isOffline ? OFFLINE_REPORT_API : SURVEY_REPORT_API;
+function surveyReportBase(): string {
+    return SURVEY_REPORT_API;
 }
 
-function surveyProjectBase(isOffline: boolean): string {
-    return isOffline ? OFFLINE_PROJECT_API : SURVEY_PROJECT_API;
+function surveyProjectBase(): string {
+    return SURVEY_PROJECT_API;
 }
 
-function tankBase(isOffline: boolean): string {
-    return isOffline ? OFFLINE_REPORT_API : TANK_API;
+function tankBase(): string {
+    return TANK_API;
 }
 
 function toFormBody(data: Record<string, string | number | boolean>): string {
@@ -67,11 +65,10 @@ export interface UpdateReportPayload {
 }
 
 export function updateReport(
-    payload: UpdateReportPayload,
-    isOffline = false
+    payload: UpdateReportPayload
 ): Promise<AxiosResponse<unknown>> {
 
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post(
         `${base}/UpdateReport`,
@@ -146,10 +143,9 @@ export interface UploadSurveyImageResponse {
 }
 
 export function uploadSurveyImage(
-    payload: UploadSurveyImagePayload,
-    isOffline = false
+    payload: UploadSurveyImagePayload
 ): Promise<AxiosResponse<UploadSurveyImageResponse>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const formData = new FormData();
     formData.append("file", payload.file);
     formData.append("projectId", String(payload.projectId));
@@ -168,10 +164,9 @@ export interface UploadGenericSurveyImagePayload extends UploadSurveyImagePayloa
 }
 
 export function uploadGenericSurveyImage(
-    payload: UploadGenericSurveyImagePayload,
-    isOffline = false
+    payload: UploadGenericSurveyImagePayload
 ): Promise<AxiosResponse<UploadSurveyImageResponse>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const formData = new FormData();
     formData.append("file", payload.file);
     formData.append("projectId", String(payload.projectId));
@@ -193,10 +188,9 @@ export function removeSurveyUploadStaging(
 }
 
 export function refreshSurveyStatus(
-    projectId: number | string,
-    isOffline = false
+    projectId: number | string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const body = toFormBody({ projectId });
     return axiosInstance.post<string>(`${base}/RefreshSurveyStatus`, body, {
         headers: FORM_URLENCODED,
@@ -205,10 +199,9 @@ export function refreshSurveyStatus(
 }
 
 export function refreshCertificates(
-    projectId: number | string,
-    isOffline = false
+    projectId: number | string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const body = toFormBody({ projectId });
     return axiosInstance.post<string>(`${base}/RefreshCertificates`, body, {
         headers: FORM_URLENCODED,
@@ -217,22 +210,20 @@ export function refreshCertificates(
 }
 
 export function refreshSurveyStatusAndCertificates(
-    projectId: number | string,
-    isOffline = false
+    projectId: number | string
 ): Promise<[AxiosResponse<string>, AxiosResponse<string>]> {
     return Promise.all([
-        refreshSurveyStatus(projectId, isOffline),
-        refreshCertificates(projectId, isOffline),
+        refreshSurveyStatus(projectId),
+        refreshCertificates(projectId),
     ]);
 }
 
 export function getReportBySectionId(
     projectId: number | string,
     templateSectionId: number | string,
-    sectionId: string,
-    isOffline = false
+    sectionId: string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const body = toFormBody({ projectId, templateSectionId, SectionId: sectionId });
     return axiosInstance.post<string>(`${base}/GetReportBySectionId`, body, {
         headers: FORM_URLENCODED,
@@ -242,21 +233,19 @@ export function getReportBySectionId(
 
 export function validateReport(
     projectId: number | string,
-    templateSectionId: number | string,
-    isOffline = false
+    templateSectionId: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const body = toFormBody({ projectId, templateSectionId });
     return axiosInstance.post(`${base}/ValidateReport`, body, { headers: FORM_URLENCODED });
 }
 
 export function validateGrading(
     projectId: number | string,
-    templateSectionId: number | string,
-    isOffline = false
+    templateSectionId: number | string
 ): Promise<AxiosResponse<unknown>> {
 
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post(
         `${base}/ValidateGrading`,
@@ -268,20 +257,18 @@ export function validateGrading(
 }
 
 export function validatePreviousTabReport(
-    projectId: number | string,
-    isOffline = false
+    projectId: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const body = toFormBody({ projectId });
     return axiosInstance.post(`${base}/ValidatePreviousTabReport`, body, { headers: FORM_URLENCODED });
 }
 
 export function exportAllValidation(
-    projectId: number | string,
-    isOffline = false
+    projectId: number | string
 ): Promise<AxiosResponse<unknown>> {
 
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post(
         `${base}/ExportAllValidation`,
@@ -294,10 +281,9 @@ export function exportAllValidation(
 
 export function exportValidationPartial(
     projectId: number | string,
-    sectionid: number | string,
-    isOffline = false
+    sectionid: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post(`${base}/ExportValidationPartial`, null, {
         params: { projectId, sectionid }
     });
@@ -309,10 +295,9 @@ export function mergeReportPdfSurveyReport(
         allTemplate: boolean;
         projectId: number | string;
         templateId: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<string>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const body = toFormBody({
         id: params.id,
         allTemplate: params.allTemplate,
@@ -336,10 +321,9 @@ export function saveReportFileSurveyReport(
         totalSections: number;
         templateId: number | string;
         projectId: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<string>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const body = toFormBody({
         contentType: payload.contentType,
         base64: payload.base64,
@@ -388,10 +372,9 @@ export function deleteReport(
 export function getExportViewSurveyReport(
     projectId: number | string,
     allTemplate: boolean,
-    templateId: number | string,
-    isOffline = false
+    templateId: number | string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.get<string>(`${base}/Export`, {
         params: { projectId, allTemplate, templateId },
         responseType: "text",
@@ -419,20 +402,18 @@ export function updateGradingCondition(
         sectionId: string;
         gradingId: number | string;
         choices: { choiceName: string; value: boolean }[];
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post<boolean>(
         `${base}/UpdateGradingCondition`,
         payload
     );
 }
 export function updateSectionNote(
-    payload: { templateId: number | string; projectId: number | string; sectionId: string; value: string },
-    isOffline = false
+    payload: { templateId: number | string; projectId: number | string; sectionId: string; value: string }
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post<boolean>(`${base}/UpdateSectionNote`, toFormBody(payload), {
         headers: FORM_URLENCODED,
     });
@@ -445,10 +426,9 @@ export function updateImageDescriptionDropdownCard(
         sectionId: string;
         cardId: number | string;
         value: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post<boolean>(
         `${base}/UpdateImageDescriptionDropdownCard`,
         payload
@@ -462,10 +442,9 @@ export function updateAdditionalDescription(
         sectionId: string;
         cardId: number | string;
         value: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post<boolean>(
         `${base}/UpdateAdditionalDescription`,
         payload
@@ -479,11 +458,10 @@ export function updateCurrentCondition(
         sectionId: string;
         cardId: number | string;
         value: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
 
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post<boolean>(
         `${base}/UpdateCurrentCondition`,
@@ -516,10 +494,9 @@ export function updateGenericImageDescriptionDropdownCard(
         cardId: number | string;
         value: number | string;
         cardName: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const formData = new FormData();
     appendGenericCardFormFields(formData, payload);
     formData.append("value", String(payload.value));
@@ -536,10 +513,9 @@ export function updateGenericAdditionalDescription(
         cardId: number | string;
         value: string;
         cardName: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const formData = new FormData();
     appendGenericCardFormFields(formData, payload);
     formData.append("value", payload.value);
@@ -556,10 +532,9 @@ export function updateGenericCurrentCondition(
         cardId: number | string;
         value: number | string;
         cardName: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     const formData = new FormData();
     appendGenericCardFormFields(formData, payload);
     formData.append("value", String(payload.value));
@@ -626,11 +601,10 @@ export interface UpdateHIReportPayload {
 }
 
 export function updateHIReport(
-    payload: UpdateHIReportPayload,
-    isOffline = false
+    payload: UpdateHIReportPayload
 ): Promise<AxiosResponse<boolean>> {
 
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post<boolean>(
         `${base}/UpdateH_IReport`,
@@ -653,10 +627,9 @@ export function placeImageSurveyReport(
         cardName: string;
         descriptionId: number | string;
         currentConditionId: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post(`${base}/PlaceImage`, toFormBody(payload), { headers: FORM_URLENCODED });
 }
 
@@ -723,10 +696,9 @@ export const SurveyIndexPartial = async (
 export function checkShowExportSettings(
     projectId: number | string,
     templateId?: number | string,
-    imonumber?: number | string,
-    isOffline = false
+    imonumber?: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get(`${base}/CheckShowExportSettings`, {
         params: { projectId, templateId, imo: imonumber },
     });
@@ -734,20 +706,18 @@ export function checkShowExportSettings(
 
 export function checkShowExportAllSettings(
     projectId: number | string,
-    imonumber?: number | string,
-    isOffline = false
+    imonumber?: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get(`${base}/CheckShowExportAllSettings`, { params: { projectId, imo: imonumber } });
 }
 
 export function getProjectExportConfig(
     projectId: number | string,
     templateId?: number | string,
-    imonumber?: number | string,
-    isOffline = false
+    imonumber?: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get(`${base}/GetProjectExportConfig`, {
         params: { projectId, templateId, imo: imonumber },
     });
@@ -755,39 +725,35 @@ export function getProjectExportConfig(
 
 export function getProjectExportAllConfig(
     projectId: number | string,
-    imonumber?: number | string,
-    isOffline = false
+    imonumber?: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get(`${base}/GetProjectExportAllConfig`, { params: { projectId, imo: imonumber } });
 }
 
 export function getAllSections(
     projectId: number | string,
     templateId?: number | string,
-    imonumber?: number | string,
-    isOffline = false
+    imonumber?: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get(`${base}/GetAllSections`, { params: { projectId, templateId, imo: imonumber } });
 }
 
 export function getAllParts(
     projectId: number | string,
-    imonumber?: number | string,
-    isOffline = false
+    imonumber?: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get(`${base}/GetAllParts`, { params: { projectId, imo: imonumber } });
 }
 
 export function validateProjectReport(
     projectId: number | string,
     templateSectionId: number | string,
-    imo: number | string,
-    isOffline = false
+    imo: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post(
         `${base}/ValidateProjectReport`,
         toFormBody({ projectId, templateSectionId, imo }),
@@ -815,10 +781,9 @@ export const validateProjectGrading = (
 };
 
 export function validateProjectPreviousTabReport(
-    projectId: number | string,
-    isOffline = false
+    projectId: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post(
         `${base}/ValidateProjectPreviousTabReport`,
         toFormBody({ projectId }),
@@ -829,10 +794,9 @@ export function validateProjectPreviousTabReport(
 export function exportAllProjectValidation(
     projectId: number | string,
     imo: number | string,
-    settings: ExportPart[],
-    isOffline = false
+    settings: ExportPart[]
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post(`${base}/ExportAllProjectValidation`, settings, {
         params: {
             projectId,
@@ -845,10 +809,9 @@ export function exportAllProjectPartialValidation(
     projectId: number | string,
     imo: number | string,
     settings: ExportPart[],
-    partid: number | string,
-    isOffline = false
+    partid: number | string
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post(`${base}/ExportAllProjectPartialValidation`, settings, {
         params: {
             projectId,
@@ -880,10 +843,9 @@ export function getProjectExportView(
     projectId: number | string,
     allTemplate: boolean,
     templateId: number | string,
-    imo: number | string,
-    isOffline = false
+    imo: number | string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get<string>(`${base}/Export`, {
         params: { projectId, allTemplate, templateId, imo },
         responseType: "text",
@@ -897,10 +859,9 @@ export function mergeReportPdfProject(
         projectId: number | string;
         templateId: number | string;
         imo: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<string>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post<string>(
         `${base}/MergeReportPDF`,
         toFormBody({
@@ -925,10 +886,9 @@ export function saveReportFileProject(
         totalSections: number;
         templateId: number | string;
         projectId: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<string>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post<string>(`${base}/SaveReportFile`, toFormBody(payload), {
         headers: FORM_URLENCODED,
         responseType: "text",
@@ -939,10 +899,9 @@ export function saveReportFileProject(
 export function getProjectReportHtml(
     projectId: number | string,
     templateSectionId: number | string,
-    imo?: number | string,
-    isOffline = false
+    imo?: number | string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post<string>(
         `${base}/GetReport`,
         toFormBody({
@@ -957,10 +916,9 @@ export function getProjectReportHtml(
 export function updateHandIGradingNotes(
     projectId: number | string,
     gradingId: number | string,
-    value: string,
-    isOffline = false
+    value: string
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post<boolean>(
         `${base}/UpdateHandIGradingNotes`,
         toFormBody({ projectId, gradingId, value }),
@@ -972,10 +930,9 @@ export function updateHandIGradingCondition(
     projectId: number | string,
     gradingId: number | string,
     choiceName: string,
-    value: boolean,
-    isOffline = false
+    value: boolean
 ): Promise<AxiosResponse<boolean>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post<boolean>(
         `${base}/UpdateHandIGradingCondition`,
         toFormBody({ projectId, gradingId, choiceName, value }),
@@ -993,10 +950,9 @@ export function placeImageProject(
         cardName: string;
         descriptionId: number | string;
         currentConditionId: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<unknown>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.post(`${base}/PlaceImage`, toFormBody(payload), { headers: FORM_URLENCODED });
 }
 
@@ -1004,10 +960,9 @@ export function getPhotoPlacementDropdownPartialProject(
     projectId: number | string,
     templateId: number | string,
     sectionId: string,
-    imo: number | string,
-    isOffline = false
+    imo: number | string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get<string>(`${base}/GetPhotoPlacementDropdownPartial`, {
         params: { projectId, templateId, sectionId, imo },
         responseType: "text",
@@ -1018,10 +973,9 @@ export function getProjectSurveyPhotoPlacementPartial(
     projectId: number | string,
     templateSectionId: number | string,
     assignmentId: string,
-    appIds: string,
-    isOffline = false
+    appIds: string
 ): Promise<AxiosResponse<string>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get<string>(`${base}/GetProjectSurveyPhotoPlacementPartial`, {
         params: { projectId, templateSectionId, assignmentId, appIds },
         responseType: "text",
@@ -1060,10 +1014,9 @@ export function uploadTankCardImage(
         imageId?: number | string;
         replaceImage?: boolean;
         cardName: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<UploadSurveyImageResponse>> {
-    const b = tankBase(isOffline);
+    const b = tankBase();
     const formData = new FormData();
     formData.append("tankfile", payload.file);
     formData.append("templateId", String(payload.templateId));
@@ -1086,10 +1039,9 @@ export function updateTankCardAdditionalDescription(
         cardNumber: number | string;
         value: string;
         cardName: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const b = tankBase(isOffline);
+    const b = tankBase();
     const formData = new FormData();
     appendTankCardFormFields(formData, payload);
     formData.append("value", payload.value);
@@ -1106,10 +1058,9 @@ export function updateTankImageDescriptionDropdownCard(
         cardNumber: number | string;
         value: number | string;
         cardName: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const b = tankBase(isOffline);
+    const b = tankBase();
     const formData = new FormData();
     appendTankCardFormFields(formData, payload);
     formData.append("value", String(payload.value));
@@ -1126,10 +1077,9 @@ export function updateTankCardCurrentCondition(
         cardNumber: number | string;
         value: number | string;
         cardName: string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const b = tankBase(isOffline);
+    const b = tankBase();
     const formData = new FormData();
     appendTankCardFormFields(formData, payload);
     formData.append("value", String(payload.value));
@@ -1145,10 +1095,9 @@ export function deleteTankCardImage(
         sectionId: string;
         cardNumber: number | string;
         imageId: number | string;
-    },
-    isOffline = false
+    }
 ): Promise<AxiosResponse<boolean>> {
-    const b = tankBase(isOffline);
+    const b = tankBase();
     const formData = new FormData();
     formData.append("templateId", String(payload.templateId));
     formData.append("projectId", String(payload.projectId));
@@ -1158,14 +1107,6 @@ export function deleteTankCardImage(
     return axiosInstance.post<boolean>(`${b}/DeleteTankCardImage`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
     });
-}
-
-export function releaseDataTransfer(payload: Record<string, unknown>): Promise<AxiosResponse<unknown>> {
-    return axiosInstance.post(`/DataTransfer/Release`, payload);
-}
-
-export function backupOfflineDatabase(): Promise<AxiosResponse<unknown>> {
-    return axiosInstance.post(`/Offline/BackupDatabase`);
 }
 
 export function GetReport(
@@ -1179,10 +1120,9 @@ export function GetReport(
 
 export function validateSurveyReportData(
     projectId: number | string,
-    templateSectionId: number | string,
-    isOffline = false
+    templateSectionId: number | string
 ) {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post(
         `${base}/ValidateReport`,
@@ -1193,10 +1133,9 @@ export function validateSurveyReportData(
 
 export function exportSurveyReportData(
     projectId: number | string,
-    templateId: number | string,
-    isOffline = false
+    templateId: number | string
 ) {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.get(`${base}/Export`, {
         params: {
@@ -1237,10 +1176,9 @@ export interface ReportIndexViewModel {
 }
 //6287
 export function getSurveyReportIndex(
-    projectId: number,
-    isOffline = false
+    projectId: number
 ): Promise<AxiosResponse<ReportIndexViewModel>> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.get(`${base}/SurveyReportIndex`, {
         params: { projectId },
     });
@@ -1248,10 +1186,9 @@ export function getSurveyReportIndex(
 
 /** New-project report index (SurveyController.Index) */
 export function getSurveyProjectIndex(
-    projectId: number,
-    isOffline = false
+    projectId: number
 ): Promise<AxiosResponse<ReportIndexViewModel>> {
-    const base = surveyProjectBase(isOffline);
+    const base = surveyProjectBase();
     return axiosInstance.get(`${base}/Index`, {
         params: { projectId },
     });
@@ -1259,10 +1196,9 @@ export function getSurveyProjectIndex(
 
 export function createSurveyReport(
     projectId: number,
-    templateSectionId: number,
-    isOffline = false
+    templateSectionId: number
 ): Promise<AxiosResponse> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post(`${base}/CreateReport`, null, {
         params: { projectId, templateSectionId },
     });
@@ -1270,10 +1206,9 @@ export function createSurveyReport(
 
 export function deleteSurveyReport(
     projectId: number,
-    templateSectionId: number,
-    isOffline = false
+    templateSectionId: number
 ): Promise<AxiosResponse> {
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
     return axiosInstance.post(`${base}/DeleteReport`, null, {
         params: { projectId, templateSectionId },
     });
@@ -1459,11 +1394,10 @@ export const GetConfig = async (projectId: number) => {
 
 export const resetTemplate = async (
     projectId: number,
-    templateId: number,
-    isOffline = false
+    templateId: number
 ) => {
 
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post(
         `${base}/ResetTemplate`,
@@ -1485,11 +1419,10 @@ export interface UpdateSectionNotePayload {
 }
 
 export function updateSectionNotes(
-    payload: UpdateSectionNotePayload,
-    isOffline = false
+    payload: UpdateSectionNotePayload
 ): Promise<AxiosResponse<unknown>> {
 
-    const base = surveyReportBase(isOffline);
+    const base = surveyReportBase();
 
     return axiosInstance.post(
         `${base}/UpdateSectionNote`,
@@ -1515,13 +1448,13 @@ export interface JobStatusResponse {
 }
 
 export function startExportAllValidation(projectId: number | string) {
-    return axiosInstance.post<{ jobId: string }>(`${surveyReportBase(false)}/StartExportAllValidation`, null, { params: { projectId } });
+    return axiosInstance.post<{ jobId: string }>(`${surveyReportBase()}/StartExportAllValidation`, null, { params: { projectId } });
 }
 export function startExportAllProjectValidation(projectId: number | string, imo: number | string, settings: ExportPart[]) {
-    return axiosInstance.post<{ jobId: string }>(`${surveyReportBase(false)}/StartExportAllProjectValidation`, settings, { params: { projectId, imo } });
+    return axiosInstance.post<{ jobId: string }>(`${surveyReportBase()}/StartExportAllProjectValidation`, settings, { params: { projectId, imo } });
 }
 export function getValidationStatus(jobId: string) {
-    return axiosInstance.get<JobStatusResponse>(`${surveyReportBase(false)}/GetValidationStatus`, { params: { jobId } });
+    return axiosInstance.get<JobStatusResponse>(`${surveyReportBase()}/GetValidationStatus`, { params: { jobId } });
 }
 export function startExportFullPdf(projectId: number, selectedSettings: any[] = []) {
     return axiosInstance.post<{ jobId: string }>(`/api/SurveyReport/StartExportFullPdf`, selectedSettings, { params: { projectId } });

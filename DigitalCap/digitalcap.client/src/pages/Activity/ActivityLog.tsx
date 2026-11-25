@@ -82,7 +82,7 @@ export default function ActivityLog({
 
             let groups: ActivityGroup[] = [];
 
-            const response = await projectService.getRecentActivities(false, projectId);
+            const response = await projectService.getRecentActivities(projectId);
 
             if (response.data) {
                 const data = response.data as any;

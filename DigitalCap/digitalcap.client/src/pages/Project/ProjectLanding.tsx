@@ -153,10 +153,6 @@ function pickProjectStatusDisplay(
     );
 }
 
-function isElectronShell(): boolean {
-    return import.meta.env.VITE_IS_ELECTRON === "true";
-}
-
 const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, onBack, onEdit, onProjectsChanged, globalPermission, initialTab = 0 }) => {
     const popup = usePopup();
     const [detail, setDetail] = useState<ProjectDetail | null>(null);
@@ -164,8 +160,6 @@ const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, onBack, onEdit
     const [activeTab, setActiveTab] = React.useState<number>(initialTab);
     const [detailReloadNonce, setDetailReloadNonce] = useState(0);
     const [synchedOnlineContact, setSynchedOnlineContact] = useState<SynchedOnlineContact | null>(null);
-    const [releaseFlag, setReleaseFlag] = useState(false);
-    const [showDiscardOfflineWarning, setShowDiscardOfflineWarning] = useState(false);
     const [activities, setActivities] = useState<any[]>([]);
     const [activitiesLoading, setActivitiesLoading] = useState<boolean>(true);
     const [activitiesError, setActivitiesError] = useState<string | null>(null);
@@ -192,7 +186,7 @@ const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, onBack, onEdit
         }
         setActivitiesError(null);
         try {
-            const response = await projectService.GetRecentActivities2ByProjectId(false, project.id);
+            const response = await projectService.GetRecentActivities2ByProjectId(project.id);
 
             const mappedActivities = (response.data || []).map((item: any) => ({
                 id: item.id,
@@ -247,7 +241,6 @@ const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, onBack, onEdit
                     setSynchedOnlineContact(
                         projectService.parseSynchedOnlineFromLanding(response.data)
                     );
-                    setReleaseFlag(projectService.parseReleaseFlagFromLanding(response.data));
 
                     if (response.data && response.data.projectDetails) {
                         const apiData = response.data.projectDetails;
@@ -326,7 +319,6 @@ const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, onBack, onEdit
                     }
                 } catch (error) {
                     setSynchedOnlineContact(null);
-                    setReleaseFlag(false);
                     const projectDetail: ProjectDetail = {
                         created_on: project.createdDate
                             ? moment(project.createdDate).format('DD-MMM-YYYY')
@@ -360,44 +352,6 @@ const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, onBack, onEdit
 
         loadProjectDetails();
     }, [project, detailReloadNonce]);
-
-    useEffect(() => {
-        if (!isElectronShell()) {
-            setShowDiscardOfflineWarning(false);
-            return;
-        }
-        if (!navigator.onLine || project.id == null || !detail || loading) {
-            return;
-        }
-
-        let cancelled = false;
-        void (async () => {
-            if (releaseFlag) {
-                if (!cancelled) setShowDiscardOfflineWarning(true);
-                return;
-            }
-            try {
-                const res = await projectService.getDownloadedDataExists(project.id ?? 0);
-                const hasData = Boolean(res.data);
-                if (cancelled) return;
-                if (hasData) {
-                    setShowDiscardOfflineWarning(false);
-                } else {
-                    setShowDiscardOfflineWarning(true);
-                    try {
-                        await projectService.updateOfflineReleasedStatus(String(project.id ?? 0));
-                    } catch {
-                    }
-                }
-            } catch {
-                if (!cancelled) setShowDiscardOfflineWarning(false);
-            }
-        })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [project.id, releaseFlag, detail, loading, detailReloadNonce]);
 
     const confirmLifecycleAction = async (action: ProjectLifecycleAction) => {
         if (!project.id) return;
@@ -460,38 +414,19 @@ const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, onBack, onEdit
         <>
             <div className="row">
                 <div className="col-md-12">
-                    {((!isElectronShell() && synchedOnlineContact && isGridOfflineDownloadStatus(project)) || showDiscardOfflineWarning) && (
-                        <>
-                            {!isElectronShell() &&
-                                synchedOnlineContact &&
-                                isGridOfflineDownloadStatus(project) && (
-                                    <div className="alert alert-danger mb-2" role="alert">
-                                        <ul className="mb-0 ps-3">
-                                            <li>
-                                                {project.name} - Report sections are Read-Only all parts have been downloaded for
-                                                offline.
-                                            </li>
-                                            <li>
-                                                Contact the following CAP Surveyors if need any details: {synchedOnlineContact.name}{" "}
-                                                ({synchedOnlineContact.email})
-                                            </li>
-                                        </ul>
-                                    </div>
-                                )}
-
-                            {showDiscardOfflineWarning && (
-                                <div className="alert alert-danger mb-2 project-landing-alert" role="alert">
-                                    <ul className="mb-0">
-                                        <li>
-                                            <p className="mb-0">
-                                                The CAP Administrator has discarded your offline project. Any changes made in this
-                                                project will not be synchronized with the online application.
-                                            </p>
-                                        </li>
-                                    </ul>
-                                </div>
-                            )}
-                        </>
+                    {synchedOnlineContact && isGridOfflineDownloadStatus(project) && (
+                        <div className="alert alert-danger mb-2" role="alert">
+                            <ul className="mb-0 ps-3">
+                                <li>
+                                    {project.name} - Report sections are Read-Only all parts have been downloaded for
+                                    offline.
+                                </li>
+                                <li>
+                                    Contact the following CAP Surveyors if need any details: {synchedOnlineContact.name}{" "}
+                                    ({synchedOnlineContact.email})
+                                </li>
+                            </ul>
+                        </div>
                     )}
                 </div>
                 <div className="col-md-12">

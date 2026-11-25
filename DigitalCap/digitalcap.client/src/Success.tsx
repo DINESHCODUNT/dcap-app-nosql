@@ -51,12 +51,6 @@ const Success: React.FC = () => {
                 if (accessToken) {
                     localStorage.setItem("token", accessToken);
                     localStorage.removeItem("postLoginRedirect");
-                    const desktopReturn = sessionStorage.getItem("desktopLoginReturn");
-                    if (desktopReturn && desktopReturn.startsWith("/desktop-login")) {
-                        sessionStorage.removeItem("desktopLoginReturn");
-                        navigate(desktopReturn, { replace: true });
-                        return;
-                    }
                     navigate("/app/Project", { replace: true });
                 } else {
                     setErrorMsg("Could not obtain an access token. Please sign in again.");

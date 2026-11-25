@@ -176,16 +176,14 @@ export function getProjectList(): Promise<AxiosResponse<ProjectPermissions>> {
     const routePath = `/api/Project/List`;
     return axiosInstance.get(routePath);
 }
-export function getProjectByStatuses(isElectron: boolean = false): Promise<AxiosResponse<ProjectCharts[]>> {
-    const controller = isElectron ? "Offline" : "Cap";
-    const routePath = `/api/${controller}/GetProjectByStatuses`;
+export function getProjectByStatuses(): Promise<AxiosResponse<ProjectCharts[]>> {
+    const routePath = `/api/Cap/GetProjectByStatuses`;
     return axiosInstance.get(routePath);
 }
 
 
-export function getRecentActivities(isElectron: boolean = false, projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
-    const controller = isElectron ? "Offline" : "Activity";
-    const routePath = `/api/${controller}/GetRecentActivities`;
+export function getRecentActivities(projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
+    const routePath = `/api/Activity/GetRecentActivities`;
     const params: any = {};
     if (projectId) {
         params.projectId = projectId;
@@ -195,9 +193,8 @@ export function getRecentActivities(isElectron: boolean = false, projectId?: num
     })
 };
 
-export function GetRecentActivities2(isElectron: boolean = false, projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
-    const controller = isElectron ? "Offline" : "Activity";
-    const routePath = `/api/${controller}/GetRecentActivities2`;
+export function GetRecentActivities2(projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
+    const routePath = `/api/Activity/GetRecentActivities2`;
     const params: any = {};
     if (projectId) {
         params.projectId = projectId;
@@ -207,9 +204,8 @@ export function GetRecentActivities2(isElectron: boolean = false, projectId?: nu
     })
 };
 
-export function GetRecentActivities2ByProjectId(isElectron: boolean = false, projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
-    const controller = isElectron ? "Offline" : "Activity";
-    const routePath = `/api/${controller}/GetRecentActivities2ByProjectId`;
+export function GetRecentActivities2ByProjectId(projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
+    const routePath = `/api/Activity/GetRecentActivities2ByProjectId`;
     const params: any = {};
     if (projectId) {
         params.projectId = projectId;
@@ -219,9 +215,8 @@ export function GetRecentActivities2ByProjectId(isElectron: boolean = false, pro
     })
 };
 
-export function GetAllActivities2ByProjectId(isElectron: boolean = false, projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
-    const controller = isElectron ? "Offline" : "Activity";
-    const routePath = `/api/${controller}/GetAllActivities2ByProjectId`;
+export function GetAllActivities2ByProjectId(projectId?: number): Promise<AxiosResponse<RecentActivity[]>> {
+    const routePath = `/api/Activity/GetAllActivities2ByProjectId`;
     const params: any = {};
     if (projectId) {
         params.projectId = projectId;
@@ -231,9 +226,8 @@ export function GetAllActivities2ByProjectId(isElectron: boolean = false, projec
     })
 };
 
-export function getProjectCount(isElectron: boolean = false): Promise<AxiosResponse<ProjectChartsCount>> {
-    const controller = isElectron ? "Offline" : "Cap";
-    const routePath = `/api/${controller}/GetProjectCount`;
+export function getProjectCount(): Promise<AxiosResponse<ProjectChartsCount>> {
+    const routePath = `/api/Cap/GetProjectCount`;
     return axiosInstance.get(routePath);
 }
 
@@ -271,15 +265,13 @@ export function countByChartCategory(charts: ProjectCharts[], ...aliases: string
     return 0;
 }
 
-export function getCertsByRegion(isElectron: boolean = false): Promise<AxiosResponse<ProjectCharts[]>> {
-    const controller = isElectron ? "Offline" : "Cap";
-    const routePath = `/api/${controller}/GetCertsByRegion`;
+export function getCertsByRegion(): Promise<AxiosResponse<ProjectCharts[]>> {
+    const routePath = `/api/Cap/GetCertsByRegion`;
     return axiosInstance.get(routePath);
 }
 
-export function getCertsCount(isElectron: boolean = false): Promise<AxiosResponse<ProjectChartsCount>> {
-    const controller = isElectron ? "Offline" : "Cap";
-    const routePath = `/api/${controller}/GetCertsCount`;
+export function getCertsCount(): Promise<AxiosResponse<ProjectChartsCount>> {
+    const routePath = `/api/Cap/GetCertsCount`;
     return axiosInstance.get(routePath);
 }
 
@@ -487,10 +479,6 @@ export interface ReportDetailsViewModel {
     cap1FinalGrade?: string | number;
     projectName?: string;
 }
-export interface ReportPermissionResponse {
-    reportEdit?: boolean;
-    reportView?: boolean;
-}
 export function getReportDetails(projectId: number): Promise<AxiosResponse<ReportDetailsViewModel>> {
     const routePath = `/api/Project/Landing`;
     return axiosInstance.get(routePath, {
@@ -581,24 +569,6 @@ export function parseSynchedOnlineFromLanding(apiData: unknown): SynchedOnlineCo
     return { name: name || "—", email: emailId || "—" };
 }
 
-export function parseReleaseFlagFromLanding(apiData: unknown): boolean {
-    if (!apiData || typeof apiData !== "object") return false;
-    const d = apiData as Record<string, unknown>;
-    const v = d.release ?? d.Release;
-    return v === true || v === "True" || v === "true";
-}
-
-export function getDownloadedDataExists(projectId: number): Promise<AxiosResponse<boolean>> {
-    return axiosInstance.get<boolean>(`/api/DataTransferAPI/GetDownloadedData`, {
-        params: { projectId },
-    });
-}
-export function updateOfflineReleasedStatus(projectId: number | string): Promise<AxiosResponse<unknown>> {
-    return axiosInstance.post(`/Offline/UpdateReleasedStatus`, null, {
-        params: { projectId },
-    });
-}
-
 function toApiDateJson(
     val: string | Date | undefined | null
 ): string | null {
@@ -650,20 +620,6 @@ export function saveReportDetails(reportDetails: ReportDetailsViewModel): Promis
         headers: {
             "Content-Type": "application/json",
         },
-    });
-}
-
-export function getReportPermission(payload: {
-    projectpermissions?: any;
-    rolepermissions?: any;
-    projectId: number;
-    roles?: string;
-}): Promise<AxiosResponse<ReportPermissionResponse>> {
-    const routePath = `/Offline/GetReportPermission`;
-    return axiosInstance.post(routePath, payload, {
-        headers: {
-            'Content-Type': 'application/json'
-        }
     });
 }
 

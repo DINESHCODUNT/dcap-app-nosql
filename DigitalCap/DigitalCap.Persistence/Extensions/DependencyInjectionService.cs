@@ -3,10 +3,9 @@ using DigitalCap.Core.Interfaces.Service;
 using DigitalCap.Core.Models;
 using DigitalCap.Core.Security;
 using DigitalCap.Infrastructure.Service;
+using DigitalCap.Persistence.Cosmos.Infrastructure;
+using DigitalCap.Persistence.Cosmos.Repositories;
 using DigitalCap.Persistence.Repositories;
-using DinkToPdf;
-using DinkToPdf.Contracts;
-using Microsoft.AspNet.Identity.EntityFramework;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -19,50 +18,48 @@ namespace DigitalCap.Persistence.Extensions
     {
         public static IServiceCollection AddPersistenceServices(this IServiceCollection services, IConfiguration configuration)
         {
-            // UnitOfWork
-            services.AddScoped<IUnitOfWork, UnitOfWork>();
+            services.AddCosmosInfrastructure(configuration);
 
-            // Repositories
-            services.AddScoped<IProjectRepository, ProjectRepository>();
+            // Repositories that do not use a database
             services.AddScoped<IBlobStorageRepository, BlobStorageRepository>();
-            services.AddScoped<IClassRepository, ClassRepository>();
-            services.AddScoped<IClientRepository, ClientRepository>();
-            services.AddScoped<IDescriptionRepository, DescriptionRepository>();
-            services.AddScoped<IFileStorageRepository, FileStorageRepository>();
             services.AddScoped<IFreedomAPIRepository, FreedomAPIRepository>();
-            services.AddScoped<IGradeRepository, GradeRepository>();
-            services.AddScoped<IGradingRepository, GradingRepository>();
-            services.AddScoped<IPlatformUserRepository, PlatformUserRepository>();
-            services.AddScoped<IPortRepository, PortRepository>();
-            services.AddScoped<IReportPartRepository, ReportPartRepository>();
-            services.AddScoped<IReportRepository, ReportRepository>();
-            services.AddScoped<ISurveyReportRepository, SurveyReportRepository>();
-            services.AddScoped<ISyncRepository, SyncRepository>();
-            services.AddScoped<ITankRepository, TankRepository>();
-            services.AddScoped<ITaskRepository, TaskRepository>();
-            services.AddScoped<ITransferDataOnlinetoOfflineRepository, TransferDataOnlinetoOfflineRepository>();
-            services.AddScoped<IDataTransferDevRepository, DataTransferDevRepository>();
-            services.AddScoped<IUserAccountRepository, UserAccountRepository>();
-            services.AddScoped<IUserPermissionRepository, UserPermissionRepository>();
             services.AddScoped<IUserRepository, UserRepository>();
-            services.AddScoped<IVesselRepository, VesselRepository>();
-            services.AddScoped<IProjectReportRepository, ProjectReportRepository>();
-            services.AddScoped<IUserAccountRepository, UserAccountRepository>();
             services.AddScoped<IEmailRepository, EmailRepository>();
-            services.AddScoped<IPlatformUserRepository, PlatformUserRepository>();
-            services.AddScoped<ISecurityClientRepository, SecurityClientRepository>();
-            services.AddScoped<IExportRepository, ExportRepository>();
-            services.AddScoped<IClientProfileRepository, ClientProfileRepository>();
             services.AddScoped<IHostPathProvider, HostPathProvider>();
             services.AddScoped<IEmailService, EmailService>();
-            services.AddScoped<IEmailRepository, EmailRepository>();
             services.AddScoped<ITemplateReader, TemplateReader>();
-            services.AddScoped<IActivityRepository, ActivityRepository>();
-            services.AddScoped<ICapRepository, CapRepository>();
-            services.AddScoped<ICommentRepository, CommentRepository>();
-            services.AddScoped<ITemplateReader, TemplateReader>();
-            services.AddScoped<IManageAbsAdminRepository, ManageAbsAdminRepository>();
-            services.AddScoped<ITemplateRepository, TemplateRepository>();
+
+            // Cosmos helpers used by the Cosmos repositories
+            services.AddScoped<CosmosActivityWriter>();
+            services.AddScoped<ProjectStatusRecalculator>();
+
+            // Cosmos repositories (the only data access)
+            services.AddScoped<IClassRepository, CosmosClassRepository>();
+            services.AddScoped<IPortRepository, CosmosPortRepository>();
+            services.AddScoped<IClientRepository, CosmosClientRepository>();
+            services.AddScoped<IClientProfileRepository, CosmosClientProfileRepository>();
+            services.AddScoped<ISecurityClientRepository, CosmosSecurityClientRepository>();
+            services.AddScoped<IUserAccountRepository, CosmosUserAccountRepository>();
+            services.AddScoped<IUserPermissionRepository, CosmosUserPermissionRepository>();
+            services.AddScoped<IActivityRepository, CosmosActivityRepository>();
+            services.AddScoped<ICommentRepository, CosmosCommentRepository>();
+            services.AddScoped<IGradeRepository, CosmosGradeRepository>();
+            services.AddScoped<IFileStorageRepository, CosmosFileStorageRepository>();
+            services.AddScoped<ITaskRepository, CosmosTaskRepository>();
+            services.AddScoped<ICapRepository, CosmosCapRepository>();
+            services.AddScoped<IVesselRepository, CosmosVesselRepository>();
+            services.AddScoped<IProjectRepository, CosmosProjectRepository>();
+            services.AddScoped<ITemplateRepository, CosmosTemplateRepository>();
+            services.AddScoped<IProjectReportRepository, CosmosProjectReportRepository>();
+            services.AddScoped<IExportRepository, CosmosExportRepository>();
+            services.AddScoped<IDescriptionRepository, CosmosDescriptionRepository>();
+            services.AddScoped<IGradingRepository, CosmosGradingRepository>();
+            services.AddScoped<ITankRepository, CosmosTankRepository>();
+            services.AddScoped<IReportPartRepository, CosmosReportPartRepository>();
+            services.AddScoped<ISurveyReportRepository, CosmosSurveyReportRepository>();
+            services.AddScoped<ISyncRepository, CosmosSyncRepository>();
+            services.AddScoped<IPlatformUserRepository, CosmosPlatformUserRepository>();
+            services.AddScoped<ITransferDataOnlinetoOfflineRepository, CosmosTransferDataOnlinetoOfflineRepository>();
             services.AddHttpClient(); // Add this
             services.AddScoped<IHttpService, HttpService>();
             // Services
@@ -74,7 +71,6 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<ISecurityClientService, SecurityClientService>();
             services.AddScoped<IUserAccountService, UserAccountService>();
             services.AddScoped<ITankService, TankService>();
-            services.AddScoped<IUserAccountService, UserAccountService>();
             services.AddScoped<IDescriptionService, DescriptionService>();
             services.AddScoped<IExportService, ExportService>();
             services.AddScoped<IReportService, ReportService>();
@@ -91,20 +87,12 @@ namespace DigitalCap.Persistence.Extensions
             services.AddScoped<ITaskService, TaskService>();
             services.AddScoped<IFileStorageService, FileStorageService>();
             services.AddScoped<ITemplateService, TemplateService>();
-            services.AddScoped<IUser, CurrentUser>();
             services.AddScoped<PermissionAuthorizationFilter>();
             services.AddScoped<IAsposePdfService, AsposePdfService>();
             services.AddScoped<IProjectReportService, ProjectReportService>();
             services.AddScoped<IConfigurationService, ConfigurationService>();
-            services.AddScoped<IUserAccountService, UserAccountService>();
-            services.AddScoped<ISecurityClientService, SecurityClientService>();
             services.AddScoped<IPlatformUserService, PlatformUserService>();
             services.AddScoped<IPortService, PortService>();
-            services.AddScoped<IEmailService, EmailService>();
-            services.AddScoped<IManageAbsAdminService, ManageAbsAdminService>();
-            services.AddSingleton(typeof(IConverter), new SynchronizedConverter(new PdfTools()));
-            // Register PermissionAuthorizationFilter - it will get IUser from DI
-            services.AddScoped<PermissionAuthorizationFilter>();
 
             // Register IUser factory - provides IUser from current HttpContext
             // Note: Using GetAwaiter().GetResult() is acceptable in DI registration context

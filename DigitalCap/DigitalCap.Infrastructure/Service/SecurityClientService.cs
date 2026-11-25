@@ -11,14 +11,11 @@ namespace DigitalCap.Infrastructure.Service
     public class SecurityClientService : ISecurityClientService
     {
         private readonly ISecurityClientRepository _securityClientRepository;
-        private readonly IUnitOfWork _unitOfWork;
 
         public SecurityClientService(
-            ISecurityClientRepository securityClientRepository,
-            IUnitOfWork unitOfWork)
+            ISecurityClientRepository securityClientRepository)
         {
             _securityClientRepository = securityClientRepository;
-            _unitOfWork = unitOfWork;
         }
 
         public async Task<ServiceResult<IReadOnlyList<ClientModel>>> GetAllClientsAsync()

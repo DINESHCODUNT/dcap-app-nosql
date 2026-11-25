@@ -6,6 +6,7 @@ using DigitalCap.WebApi.Core;
 using Microsoft.AspNet.Identity.EntityFramework;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections.Generic;
@@ -39,14 +40,15 @@ namespace DigitalCap.Persistence.Repositories
         }
         public async Task<List<ApplicationDto>> GetAllUsers()
         {
-            return _userManager.Users
+            // Cosmos DB does not allow synchronous queries: use ToListAsync
+            return await _userManager.Users
                 .Select(u => new ApplicationDto
                 {
                     Id = u.Id,
                     Email = u.Email,
                     UserName = u.UserName
                 })
-                .ToList();
+                .ToListAsync();
         }
 
         public async Task<string> GetLoggedInUserName()
